@@ -22,7 +22,14 @@ import java.util.Locale
 
 class MainActivity : Activity() {
 
-    data class Asset(val name: String, val amount: Long)
+    data class Asset(
+        val name: String,
+        val quantity: Double,
+        val price: Double
+    ) {
+        val value: Double
+            get() = quantity * price
+    }
 
     private val prefsName = "investment_android_prefs"
     private val assetsKey = "assets_json"
@@ -37,17 +44,18 @@ class MainActivity : Activity() {
         showWelcomeScreen()
     }
 
+    private fun demoAssets(): List<Asset> =
+        listOf(
+            Asset("Cash", 1.0, 250_000_000.0),
+            Asset("Gold", 1.0, 375_000_000.0),
+            Asset("Stocks", 1.0, 250_000_000.0),
+            Asset("Crypto", 1.0, 375_000_000.0)
+        )
+
     private fun ensureSeedData() {
         val prefs = getSharedPreferences(prefsName, MODE_PRIVATE)
         if (!prefs.contains(assetsKey)) {
-            saveAssets(
-                listOf(
-                    Asset("Cash", 250_000_000L),
-                    Asset("Gold", 375_000_000L),
-                    Asset("Stocks", 250_000_000L),
-                    Asset("Crypto", 375_000_000L)
-                )
-            )
+            saveAssets(demoAssets())
         }
     }
 
@@ -55,18 +63,42 @@ class MainActivity : Activity() {
         val raw = getSharedPreferences(prefsName, MODE_PRIVATE)
             .getString(assetsKey, "[]") ?: "[]"
 
-        return try {
+        val assets = mutableListOf<Asset>()
+        var migratedLegacyData = false
+
+        try {
             val array = JSONArray(raw)
-            MutableList(array.length()) { index ->
+            for (index in 0 until array.length()) {
                 val item = array.getJSONObject(index)
-                Asset(
-                    name = item.getString("name"),
-                    amount = item.getLong("amount")
-                )
+                if (item.has("quantity") && item.has("price")) {
+                    assets.add(
+                        Asset(
+                            name = item.getString("name"),
+                            quantity = item.getDouble("quantity"),
+                            price = item.getDouble("price")
+                        )
+                    )
+                } else {
+                    val legacyAmount = item.optDouble("amount", 0.0)
+                    assets.add(
+                        Asset(
+                            name = item.optString("name", "Asset"),
+                            quantity = 1.0,
+                            price = legacyAmount
+                        )
+                    )
+                    migratedLegacyData = true
+                }
             }
         } catch (_: Exception) {
-            mutableListOf()
+            return mutableListOf()
         }
+
+        if (migratedLegacyData) {
+            saveAssets(assets)
+        }
+
+        return assets
     }
 
     private fun saveAssets(assets: List<Asset>) {
@@ -75,7 +107,8 @@ class MainActivity : Activity() {
             array.put(
                 JSONObject().apply {
                     put("name", asset.name)
-                    put("amount", asset.amount)
+                    put("quantity", asset.quantity)
+                    put("price", asset.price)
                 }
             )
         }
@@ -86,8 +119,19 @@ class MainActivity : Activity() {
             .apply()
     }
 
-    private fun formatToman(value: Long): String {
-        return NumberFormat.getNumberInstance(Locale.US).format(value) + " Toman"
+    private fun formatToman(value: Double): String {
+        val formatter = NumberFormat.getNumberInstance(Locale.US).apply {
+            maximumFractionDigits = 0
+        }
+        return formatter.format(value) + " Toman"
+    }
+
+    private fun formatQuantity(value: Double): String {
+        return NumberFormat.getNumberInstance(Locale.US).apply {
+            maximumFractionDigits = 6
+            minimumFractionDigits = 0
+            isGroupingUsed = true
+        }.format(value)
     }
 
     private fun showWelcomeScreen() {
@@ -139,7 +183,7 @@ class MainActivity : Activity() {
     private fun showPortfolioScreen() {
         onPortfolioScreen = true
         val assets = loadAssets()
-        val total = assets.sumOf { it.amount }
+        val total = assets.sumOf { it.value }
 
         val container = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
@@ -184,8 +228,8 @@ class MainActivity : Activity() {
             )
         } else {
             assets.forEachIndexed { index, asset ->
-                val allocation = if (total > 0L) {
-                    asset.amount.toDouble() / total.toDouble() * 100.0
+                val allocation = if (total > 0.0) {
+                    asset.value / total * 100.0
                 } else {
                     0.0
                 }
@@ -197,7 +241,7 @@ class MainActivity : Activity() {
             text = "+ Add Asset"
             isAllCaps = false
             textSize = 16f
-            setOnClickListener { showAddAssetDialog() }
+            setOnClickListener { showAssetDialog() }
         }
 
         val resetButton = Button(this).apply {
@@ -209,14 +253,7 @@ class MainActivity : Activity() {
                     .setMessage("This will replace your current test assets with the original demo portfolio.")
                     .setNegativeButton("Cancel", null)
                     .setPositiveButton("Reset") { _, _ ->
-                        saveAssets(
-                            listOf(
-                                Asset("Cash", 250_000_000L),
-                                Asset("Gold", 375_000_000L),
-                                Asset("Stocks", 250_000_000L),
-                                Asset("Crypto", 375_000_000L)
-                            )
-                        )
+                        saveAssets(demoAssets())
                         showPortfolioScreen()
                     }
                     .show()
@@ -247,7 +284,7 @@ class MainActivity : Activity() {
         )
     }
 
-    private fun showAddAssetDialog() {
+    private fun showAssetDialog(index: Int? = null, existing: Asset? = null) {
         val form = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(20), dp(8), dp(20), 0)
@@ -256,38 +293,64 @@ class MainActivity : Activity() {
         val nameInput = EditText(this).apply {
             hint = "Asset name"
             inputType = InputType.TYPE_CLASS_TEXT
+            setText(existing?.name ?: "")
         }
 
-        val amountInput = EditText(this).apply {
-            hint = "Value in Toman"
-            inputType = InputType.TYPE_CLASS_NUMBER
+        val quantityInput = EditText(this).apply {
+            hint = "Quantity"
+            inputType = InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_FLAG_DECIMAL
+            setText(existing?.let { formatQuantity(it.quantity).replace(",", "") } ?: "")
+        }
+
+        val priceInput = EditText(this).apply {
+            hint = "Price per unit (Toman)"
+            inputType = InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_FLAG_DECIMAL
+            setText(existing?.let { it.price.toLong().toString() } ?: "")
         }
 
         form.addView(nameInput)
-        form.addView(amountInput)
+        form.addView(quantityInput)
+        form.addView(priceInput)
 
+        val isEditing = index != null && existing != null
         val dialog = AlertDialog.Builder(this)
-            .setTitle("Add Asset")
+            .setTitle(if (isEditing) "Edit Asset" else "Add Asset")
             .setView(form)
             .setNegativeButton("Cancel", null)
-            .setPositiveButton("Add", null)
+            .setPositiveButton(if (isEditing) "Save" else "Add", null)
             .create()
 
         dialog.setOnShowListener {
             dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
                 val name = nameInput.text.toString().trim()
-                val amount = amountInput.text.toString().trim().toLongOrNull()
+                val quantity = quantityInput.text.toString().trim().replace(",", "").toDoubleOrNull()
+                val price = priceInput.text.toString().trim().replace(",", "").toDoubleOrNull()
 
                 when {
                     name.isEmpty() -> nameInput.error = "Enter an asset name"
-                    amount == null || amount < 0L -> amountInput.error = "Enter a valid amount"
+                    quantity == null || quantity <= 0.0 ->
+                        quantityInput.error = "Enter a quantity greater than zero"
+                    price == null || price < 0.0 ->
+                        priceInput.error = "Enter a valid price"
                     else -> {
                         val assets = loadAssets()
-                        assets.add(Asset(name, amount))
+                        val updated = Asset(name, quantity, price)
+
+                        if (isEditing && index != null && index in assets.indices) {
+                            assets[index] = updated
+                        } else {
+                            assets.add(updated)
+                        }
+
                         saveAssets(assets)
                         dialog.dismiss()
                         showPortfolioScreen()
-                        Toast.makeText(this, "$name added", Toast.LENGTH_SHORT).show()
+
+                        Toast.makeText(
+                            this,
+                            if (isEditing) name + " updated" else name + " added",
+                            Toast.LENGTH_SHORT
+                        ).show()
                     }
                 }
             }
@@ -310,6 +373,9 @@ class MainActivity : Activity() {
                 cornerRadius = dp(14).toFloat()
                 setStroke(dp(1), Color.rgb(225, 225, 225))
             }
+            setOnClickListener {
+                showAssetDialog(index, asset)
+            }
             setOnLongClickListener {
                 confirmDeleteAsset(index, asset)
                 true
@@ -323,10 +389,24 @@ class MainActivity : Activity() {
             setTextColor(Color.rgb(35, 35, 35))
         }
 
-        val valueView = TextView(this).apply {
-            text = formatToman(asset.amount)
-            textSize = 16f
+        val quantityView = TextView(this).apply {
+            text = "Quantity: " + formatQuantity(asset.quantity)
+            textSize = 14f
             setTextColor(Color.DKGRAY)
+            setPadding(0, dp(7), 0, dp(1))
+        }
+
+        val priceView = TextView(this).apply {
+            text = "Price: " + formatToman(asset.price)
+            textSize = 14f
+            setTextColor(Color.DKGRAY)
+        }
+
+        val valueView = TextView(this).apply {
+            text = "Value: " + formatToman(asset.value)
+            textSize = 16f
+            setTypeface(typeface, Typeface.BOLD)
+            setTextColor(Color.rgb(45, 45, 45))
             setPadding(0, dp(6), 0, dp(2))
         }
 
@@ -337,13 +417,15 @@ class MainActivity : Activity() {
         }
 
         val hintView = TextView(this).apply {
-            text = "Long press to delete"
+            text = "Tap to edit • Long press to delete"
             textSize = 12f
-            setTextColor(Color.LTGRAY)
-            setPadding(0, dp(7), 0, 0)
+            setTextColor(Color.GRAY)
+            setPadding(0, dp(8), 0, 0)
         }
 
         card.addView(nameView)
+        card.addView(quantityView)
+        card.addView(priceView)
         card.addView(valueView)
         card.addView(allocationView)
         card.addView(hintView)
@@ -361,7 +443,7 @@ class MainActivity : Activity() {
 
     private fun confirmDeleteAsset(index: Int, asset: Asset) {
         AlertDialog.Builder(this)
-            .setTitle("Delete ${asset.name}?")
+            .setTitle("Delete " + asset.name + "?")
             .setMessage("This removes the asset from this test portfolio.")
             .setNegativeButton("Cancel", null)
             .setPositiveButton("Delete") { _, _ ->
