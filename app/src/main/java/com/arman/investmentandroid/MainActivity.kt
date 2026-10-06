@@ -7,6 +7,8 @@ import android.graphics.Color
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.text.InputType
 import android.view.Gravity
 import android.view.ViewGroup
@@ -71,13 +73,22 @@ class MainActivity : Activity() {
     private val snapshotsKey = "snapshots_json"
     private val toleranceKey = "rebalance_tolerance"
     private val lastPriceUpdateKey = "last_price_update"
+    private val displayUnitKey = "display_unit"
+    private val summaryPeriodKey = "summary_period"
+    private val autoRefreshMinutesKey = "auto_refresh_minutes"
     private val exportBackupRequestCode = 1001
     private val importBackupRequestCode = 1002
     private val categories = listOf("Cash", "Gold", "Stocks", "Crypto", "Fund", "Other")
     private val priceSources = listOf("Manual", "Nobitex")
+    private val displayUnits = listOf("Toman", "kT", "MT", "Rial")
+    private val summaryPeriods = listOf("Day", "Week", "Month", "Year")
+    private val autoRefreshLabels = listOf("Off", "5 minutes", "15 minutes", "30 minutes", "60 minutes")
+    private val autoRefreshValues = listOf(0, 5, 15, 30, 60)
     private val defaultTolerancePercent = 1.0
     private var onPortfolioScreen = false
     private var onPriceCenterScreen = false
+    private val autoRefreshHandler = Handler(Looper.getMainLooper())
+    private var autoRefreshRunnable: Runnable? = null
 
     private fun dp(value: Int): Int =
         (value * resources.displayMetrics.density).toInt()
@@ -86,6 +97,16 @@ class MainActivity : Activity() {
         super.onCreate(savedInstanceState)
         ensureSeedData()
         showWelcomeScreen()
+    }
+
+    override fun onResume() {
+        super.onResume()
+        scheduleAutoRefresh()
+    }
+
+    override fun onPause() {
+        stopAutoRefresh()
+        super.onPause()
     }
 
     private fun demoAssets(): List<Asset> =
@@ -351,10 +372,42 @@ class MainActivity : Activity() {
     }
 
     private fun formatToman(value: Double): String {
-        val formatter = NumberFormat.getNumberInstance(Locale.US).apply {
-            maximumFractionDigits = 0
+        val unit = loadDisplayUnit()
+        val scaledValue: Double
+        val suffix: String
+        val decimals: Int
+
+        when (unit) {
+            "kT" -> {
+                scaledValue = value / 1_000.0
+                suffix = " kT"
+                decimals = 1
+            }
+
+            "MT" -> {
+                scaledValue = value / 1_000_000.0
+                suffix = " MT"
+                decimals = 2
+            }
+
+            "Rial" -> {
+                scaledValue = value * 10.0
+                suffix = " Rial"
+                decimals = 0
+            }
+
+            else -> {
+                scaledValue = value
+                suffix = " Toman"
+                decimals = 0
+            }
         }
-        return formatter.format(value) + " Toman"
+
+        val formatter = NumberFormat.getNumberInstance(Locale.US).apply {
+            maximumFractionDigits = decimals
+            minimumFractionDigits = 0
+        }
+        return formatter.format(scaledValue) + suffix
     }
 
     private fun formatSignedToman(value: Double): String {
@@ -397,6 +450,64 @@ class MainActivity : Activity() {
     private fun loadLastPriceUpdate(): Long {
         return getSharedPreferences(prefsName, MODE_PRIVATE)
             .getLong(lastPriceUpdateKey, 0L)
+    }
+
+    private fun loadDisplayUnit(): String {
+        return getSharedPreferences(prefsName, MODE_PRIVATE)
+            .getString(displayUnitKey, "Toman") ?: "Toman"
+    }
+
+    private fun loadSummaryPeriod(): String {
+        return getSharedPreferences(prefsName, MODE_PRIVATE)
+            .getString(summaryPeriodKey, "Month") ?: "Month"
+    }
+
+    private fun loadAutoRefreshMinutes(): Int {
+        return getSharedPreferences(prefsName, MODE_PRIVATE)
+            .getInt(autoRefreshMinutesKey, 0)
+    }
+
+    private fun saveSettings(displayUnit: String, summaryPeriod: String, autoRefreshMinutes: Int) {
+        getSharedPreferences(prefsName, MODE_PRIVATE)
+            .edit()
+            .putString(displayUnitKey, displayUnit)
+            .putString(summaryPeriodKey, summaryPeriod)
+            .putInt(autoRefreshMinutesKey, autoRefreshMinutes)
+            .apply()
+    }
+
+    private fun stopAutoRefresh() {
+        autoRefreshRunnable?.let { autoRefreshHandler.removeCallbacks(it) }
+        autoRefreshRunnable = null
+    }
+
+    private fun scheduleAutoRefresh() {
+        stopAutoRefresh()
+        val minutes = loadAutoRefreshMinutes()
+        if (minutes <= 0) {
+            return
+        }
+
+        val delay = minutes * 60_000L
+        val runnable = object : Runnable {
+            override fun run() {
+                updateNobitexPrices(showResult = false)
+                autoRefreshHandler.postDelayed(this, delay)
+            }
+        }
+
+        autoRefreshRunnable = runnable
+        autoRefreshHandler.postDelayed(runnable, delay)
+    }
+
+    private fun periodStartMillis(period: String): Long {
+        val duration = when (period) {
+            "Day" -> 24L * 60L * 60L * 1000L
+            "Week" -> 7L * 24L * 60L * 60L * 1000L
+            "Year" -> 365L * 24L * 60L * 60L * 1000L
+            else -> 30L * 24L * 60L * 60L * 1000L
+        }
+        return System.currentTimeMillis() - duration
     }
 
     private fun showWelcomeScreen() {
@@ -587,6 +698,8 @@ class MainActivity : Activity() {
             )
         }
 
+        addPeriodSummary(container, loadSummaryPeriod())
+
         if (assets.isEmpty()) {
             container.addView(
                 TextView(this).apply {
@@ -665,6 +778,13 @@ class MainActivity : Activity() {
             setOnClickListener { showHistoryDialog() }
         }
 
+        val settingsButton = Button(this).apply {
+            text = "Settings"
+            isAllCaps = false
+            textSize = 16f
+            setOnClickListener { showSettingsDialog() }
+        }
+
         val backupButton = Button(this).apply {
             text = "Backup / Restore"
             isAllCaps = false
@@ -710,6 +830,7 @@ class MainActivity : Activity() {
         container.addView(toleranceButton, buttonParams)
         container.addView(activityButton, buttonParams)
         container.addView(historyButton, buttonParams)
+        container.addView(settingsButton, buttonParams)
         container.addView(backupButton, buttonParams)
         container.addView(resetButton, buttonParams)
         container.addView(backButton, buttonParams)
@@ -719,6 +840,159 @@ class MainActivity : Activity() {
                 addView(container)
             }
         )
+    }
+
+    private fun addPeriodSummary(parent: LinearLayout, period: String) {
+        val transactions = loadTransactions()
+            .filter { it.timestamp >= periodStartMillis(period) }
+
+        val buyTotal = transactions
+            .filter { it.type == "BUY" }
+            .sumOf { it.quantity * it.price }
+
+        val sellTotal = transactions
+            .filter { it.type == "SELL" }
+            .sumOf { it.quantity * it.price }
+
+        val realizedProfit = transactions
+            .filter { it.type == "SELL" }
+            .sumOf { it.realizedProfit }
+
+        val income = transactions
+            .filter { it.type == "INCOME" }
+            .sumOf { it.price }
+
+        val expense = transactions
+            .filter { it.type == "EXPENSE" }
+            .sumOf { it.price }
+
+        parent.addView(
+            TextView(this).apply {
+                text = period + " Summary"
+                textSize = 19f
+                setTypeface(typeface, Typeface.BOLD)
+                setTextColor(Color.rgb(35, 35, 35))
+                setPadding(0, dp(12), 0, dp(6))
+            }
+        )
+
+        parent.addView(
+            TextView(this).apply {
+                text = buildString {
+                    append("Buy: ")
+                    append(formatToman(buyTotal))
+                    append("  •  Sell: ")
+                    append(formatToman(sellTotal))
+                    append("\nRealized P/L: ")
+                    append(formatSignedToman(realizedProfit))
+                    append("\nIncome: ")
+                    append(formatToman(income))
+                    append("  •  Expense: ")
+                    append(formatToman(expense))
+                }
+                textSize = 13f
+                setTextColor(Color.DKGRAY)
+                setPadding(dp(12), dp(9), dp(12), dp(9))
+                background = GradientDrawable().apply {
+                    setColor(Color.WHITE)
+                    cornerRadius = dp(10).toFloat()
+                    setStroke(dp(1), Color.rgb(230, 230, 230))
+                }
+            },
+            LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            ).apply {
+                bottomMargin = dp(12)
+            }
+        )
+    }
+
+    private fun showSettingsDialog() {
+        val form = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(20), dp(8), dp(20), dp(4))
+        }
+
+        fun addLabel(textValue: String) {
+            form.addView(
+                TextView(this).apply {
+                    text = textValue
+                    textSize = 14f
+                    setTypeface(typeface, Typeface.BOLD)
+                    setTextColor(Color.DKGRAY)
+                    setPadding(0, dp(10), 0, dp(4))
+                }
+            )
+        }
+
+        addLabel("Display unit")
+        val unitSpinner = Spinner(this)
+        val unitAdapter = ArrayAdapter(
+            this,
+            android.R.layout.simple_spinner_item,
+            displayUnits
+        ).apply {
+            setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item)
+        }
+        unitSpinner.adapter = unitAdapter
+        unitSpinner.setSelection(
+            displayUnits.indexOf(loadDisplayUnit()).let { if (it >= 0) it else 0 }
+        )
+        form.addView(unitSpinner)
+
+        addLabel("Summary period")
+        val periodSpinner = Spinner(this)
+        val periodAdapter = ArrayAdapter(
+            this,
+            android.R.layout.simple_spinner_item,
+            summaryPeriods
+        ).apply {
+            setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item)
+        }
+        periodSpinner.adapter = periodAdapter
+        periodSpinner.setSelection(
+            summaryPeriods.indexOf(loadSummaryPeriod()).let { if (it >= 0) it else 2 }
+        )
+        form.addView(periodSpinner)
+
+        addLabel("Automatic Nobitex refresh while app is open")
+        val refreshSpinner = Spinner(this)
+        val refreshAdapter = ArrayAdapter(
+            this,
+            android.R.layout.simple_spinner_item,
+            autoRefreshLabels
+        ).apply {
+            setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item)
+        }
+        refreshSpinner.adapter = refreshAdapter
+        val currentRefresh = loadAutoRefreshMinutes()
+        refreshSpinner.setSelection(
+            autoRefreshValues.indexOf(currentRefresh).let { if (it >= 0) it else 0 }
+        )
+        form.addView(refreshSpinner)
+
+        val dialog = AlertDialog.Builder(this)
+            .setTitle("Settings")
+            .setView(form)
+            .setNegativeButton("Cancel", null)
+            .setPositiveButton("Save", null)
+            .create()
+
+        dialog.setOnShowListener {
+            dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
+                val unit = unitSpinner.selectedItem.toString()
+                val period = periodSpinner.selectedItem.toString()
+                val refresh = autoRefreshValues[refreshSpinner.selectedItemPosition]
+
+                saveSettings(unit, period, refresh)
+                scheduleAutoRefresh()
+                dialog.dismiss()
+                showPortfolioScreen()
+            }
+        }
+
+        dialog.show()
     }
 
     private fun showTargetsDialog() {
@@ -1594,7 +1868,7 @@ class MainActivity : Activity() {
         }
     }
 
-    private fun updateNobitexPrices() {
+    private fun updateNobitexPrices(showResult: Boolean = true) {
         val currentAssets = loadAssets()
         val apiEntries = currentAssets.withIndex().filter {
             it.value.priceSource == "Nobitex" &&
@@ -1603,15 +1877,19 @@ class MainActivity : Activity() {
         }
 
         if (apiEntries.isEmpty()) {
-            AlertDialog.Builder(this)
-                .setTitle("Nobitex")
-                .setMessage("No Crypto assets are configured with Nobitex as their price source.")
-                .setPositiveButton("OK", null)
-                .show()
+            if (showResult) {
+                AlertDialog.Builder(this)
+                    .setTitle("Nobitex")
+                    .setMessage("No Crypto assets are configured with Nobitex as their price source.")
+                    .setPositiveButton("OK", null)
+                    .show()
+            }
             return
         }
 
-        Toast.makeText(this, "Updating Nobitex prices...", Toast.LENGTH_SHORT).show()
+        if (showResult) {
+            Toast.makeText(this, "Updating Nobitex prices...", Toast.LENGTH_SHORT).show()
+        }
 
         Thread {
             try {
@@ -1693,30 +1971,36 @@ class MainActivity : Activity() {
                 markPriceUpdate()
 
                 runOnUiThread {
-                    val message = buildString {
-                        append("Updated: ")
-                        append(updatedNames.joinToString(", "))
-                        append("\nUSDT rate: ")
-                        append(formatToman(usdtToman))
-                        if (failedNames.isNotEmpty()) {
-                            append("\nFailed: ")
-                            append(failedNames.joinToString(", "))
+                    if (showResult) {
+                        val message = buildString {
+                            append("Updated: ")
+                            append(updatedNames.joinToString(", "))
+                            append("\nUSDT rate: ")
+                            append(formatToman(usdtToman))
+                            if (failedNames.isNotEmpty()) {
+                                append("\nFailed: ")
+                                append(failedNames.joinToString(", "))
+                            }
                         }
-                    }
 
-                    AlertDialog.Builder(this)
-                        .setTitle("Nobitex Update")
-                        .setMessage(message)
-                        .setPositiveButton("OK") { _, _ -> showPortfolioScreen() }
-                        .show()
+                        AlertDialog.Builder(this)
+                            .setTitle("Nobitex Update")
+                            .setMessage(message)
+                            .setPositiveButton("OK") { _, _ -> showPortfolioScreen() }
+                            .show()
+                    } else if (onPortfolioScreen) {
+                        showPortfolioScreen()
+                    }
                 }
             } catch (error: Exception) {
-                runOnUiThread {
-                    AlertDialog.Builder(this)
-                        .setTitle("Nobitex Update Failed")
-                        .setMessage(error.message ?: "Could not update market prices.")
-                        .setPositiveButton("OK", null)
-                        .show()
+                if (showResult) {
+                    runOnUiThread {
+                        AlertDialog.Builder(this)
+                            .setTitle("Nobitex Update Failed")
+                            .setMessage(error.message ?: "Could not update market prices.")
+                            .setPositiveButton("OK", null)
+                            .show()
+                    }
                 }
             }
         }.start()
@@ -1909,6 +2193,9 @@ class MainActivity : Activity() {
             put("transactions", JSONArray(prefs.getString(transactionsKey, "[]") ?: "[]"))
             put("snapshots", JSONArray(prefs.getString(snapshotsKey, "[]") ?: "[]"))
             put("tolerance", loadTolerance())
+            put("displayUnit", loadDisplayUnit())
+            put("summaryPeriod", loadSummaryPeriod())
+            put("autoRefreshMinutes", loadAutoRefreshMinutes())
         }.toString(2)
     }
 
@@ -1918,6 +2205,9 @@ class MainActivity : Activity() {
         val transactions = root.optJSONArray("transactions") ?: JSONArray()
         val snapshots = root.optJSONArray("snapshots") ?: JSONArray()
         val tolerance = root.optDouble("tolerance", defaultTolerancePercent)
+        val displayUnit = root.optString("displayUnit", "Toman")
+        val summaryPeriod = root.optString("summaryPeriod", "Month")
+        val autoRefreshMinutes = root.optInt("autoRefreshMinutes", 0)
 
         getSharedPreferences(prefsName, MODE_PRIVATE)
             .edit()
@@ -1925,7 +2215,12 @@ class MainActivity : Activity() {
             .putString(transactionsKey, transactions.toString())
             .putString(snapshotsKey, snapshots.toString())
             .putString(toleranceKey, tolerance.toString())
+            .putString(displayUnitKey, displayUnit)
+            .putString(summaryPeriodKey, summaryPeriod)
+            .putInt(autoRefreshMinutesKey, autoRefreshMinutes)
             .apply()
+
+        scheduleAutoRefresh()
     }
 
     @Deprecated("Deprecated in Java")
