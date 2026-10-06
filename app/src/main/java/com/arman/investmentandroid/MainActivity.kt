@@ -31,7 +31,8 @@ class MainActivity : Activity() {
         val category: String,
         val quantity: Double,
         val price: Double,
-        val averageCost: Double
+        val averageCost: Double,
+        val targetPercent: Double
     ) {
         val value: Double
             get() = quantity * price
@@ -56,6 +57,7 @@ class MainActivity : Activity() {
     private val assetsKey = "assets_json"
     private val transactionsKey = "transactions_json"
     private val categories = listOf("Cash", "Gold", "Stocks", "Crypto", "Fund", "Other")
+    private val targetTolerancePercent = 1.0
     private var onPortfolioScreen = false
 
     private fun dp(value: Int): Int =
@@ -69,10 +71,10 @@ class MainActivity : Activity() {
 
     private fun demoAssets(): List<Asset> =
         listOf(
-            Asset("Cash", "Cash", 1.0, 250_000_000.0, 250_000_000.0),
-            Asset("Gold", "Gold", 1.0, 375_000_000.0, 340_000_000.0),
-            Asset("Stocks", "Stocks", 1.0, 250_000_000.0, 265_000_000.0),
-            Asset("Crypto", "Crypto", 1.0, 375_000_000.0, 330_000_000.0)
+            Asset("Cash", "Cash", 1.0, 250_000_000.0, 250_000_000.0, 20.0),
+            Asset("Gold", "Gold", 1.0, 375_000_000.0, 340_000_000.0, 30.0),
+            Asset("Stocks", "Stocks", 1.0, 250_000_000.0, 265_000_000.0, 20.0),
+            Asset("Crypto", "Crypto", 1.0, 375_000_000.0, 330_000_000.0, 30.0)
         )
 
     private fun inferCategory(name: String): String {
@@ -84,6 +86,17 @@ class MainActivity : Activity() {
             "crypto" in lower || "btc" in lower || "eth" in lower -> "Crypto"
             "fund" in lower || "etf" in lower -> "Fund"
             else -> "Other"
+        }
+    }
+
+    private fun defaultTargetPercent(name: String, category: String): Double {
+        val lower = name.lowercase(Locale.US)
+        return when {
+            lower == "cash" || category == "Cash" -> 20.0
+            lower == "gold" || category == "Gold" -> 30.0
+            lower == "stocks" || category == "Stocks" -> 20.0
+            lower == "crypto" || category == "Crypto" -> 30.0
+            else -> 0.0
         }
     }
 
@@ -127,13 +140,21 @@ class MainActivity : Activity() {
                             price
                         }
 
+                        val targetPercent = if (item.has("targetPercent")) {
+                            item.optDouble("targetPercent", 0.0)
+                        } else {
+                            migratedLegacyData = true
+                            defaultTargetPercent(name, category)
+                        }
+
                         assets.add(
                             Asset(
                                 name = name,
                                 category = category,
                                 quantity = item.optDouble("quantity", 1.0),
                                 price = price,
-                                averageCost = averageCost
+                                averageCost = averageCost,
+                                targetPercent = targetPercent
                             )
                         )
                     }
@@ -146,7 +167,8 @@ class MainActivity : Activity() {
                                 category = category,
                                 quantity = 1.0,
                                 price = legacyAmount,
-                                averageCost = legacyAmount
+                                averageCost = legacyAmount,
+                                targetPercent = defaultTargetPercent(name, category)
                             )
                         )
                         migratedLegacyData = true
@@ -174,6 +196,7 @@ class MainActivity : Activity() {
                     put("quantity", asset.quantity)
                     put("price", asset.price)
                     put("averageCost", asset.averageCost)
+                    put("targetPercent", asset.targetPercent)
                 }
             )
         }
@@ -305,6 +328,7 @@ class MainActivity : Activity() {
         val totalValue = assets.sumOf { it.value }
         val totalInvested = assets.sumOf { it.invested }
         val totalProfit = totalValue - totalInvested
+        val totalTarget = assets.sumOf { it.targetPercent }
 
         val container = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
@@ -360,9 +384,45 @@ class MainActivity : Activity() {
                         else -> Color.DKGRAY
                     }
                 )
-                setPadding(0, 0, 0, dp(22))
+                setPadding(0, 0, 0, dp(8))
             }
         )
+
+        container.addView(
+            TextView(this).apply {
+                text = String.format(Locale.US, "Target total: %.1f%%", totalTarget)
+                textSize = 14f
+                setTypeface(typeface, Typeface.BOLD)
+                setTextColor(
+                    if (kotlin.math.abs(totalTarget - 100.0) <= 0.01) {
+                        Color.rgb(25, 125, 70)
+                    } else {
+                        Color.rgb(185, 110, 25)
+                    }
+                )
+                setPadding(0, 0, 0, dp(4))
+            }
+        )
+
+        if (kotlin.math.abs(totalTarget - 100.0) > 0.01) {
+            container.addView(
+                TextView(this).apply {
+                    text = "Targets should add up to 100% for a complete rebalance plan."
+                    textSize = 12f
+                    setTextColor(Color.GRAY)
+                    setPadding(0, 0, 0, dp(18))
+                }
+            )
+        } else {
+            container.addView(
+                TextView(this).apply {
+                    text = "Rebalance tolerance: ±1.0%"
+                    textSize = 12f
+                    setTextColor(Color.GRAY)
+                    setPadding(0, 0, 0, dp(18))
+                }
+            )
+        }
 
         if (assets.isEmpty()) {
             container.addView(
@@ -387,6 +447,7 @@ class MainActivity : Activity() {
                         parent = container,
                         asset = asset,
                         allocation = allocation,
+                        totalPortfolioValue = totalValue,
                         index = indexedAsset.index
                     )
                 }
@@ -484,11 +545,18 @@ class MainActivity : Activity() {
             setText(existing?.let { it.averageCost.toLong().toString() } ?: "")
         }
 
+        val targetInput = EditText(this).apply {
+            hint = "Target allocation (%)"
+            inputType = InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_FLAG_DECIMAL
+            setText(existing?.let { formatQuantity(it.targetPercent) } ?: "0")
+        }
+
         form.addView(nameInput)
         form.addView(categorySpinner)
         form.addView(quantityInput)
         form.addView(priceInput)
         form.addView(averageCostInput)
+        form.addView(targetInput)
 
         val isEditing = index != null && existing != null
         val dialog = AlertDialog.Builder(this)
@@ -506,6 +574,7 @@ class MainActivity : Activity() {
                 val price = priceInput.text.toString().trim().replace(",", "").toDoubleOrNull()
                 val averageCostText = averageCostInput.text.toString().trim().replace(",", "")
                 val averageCost = if (averageCostText.isBlank()) price else averageCostText.toDoubleOrNull()
+                val targetPercent = targetInput.text.toString().trim().replace(",", "").toDoubleOrNull()
 
                 when {
                     name.isEmpty() -> nameInput.error = "Enter an asset name"
@@ -515,9 +584,11 @@ class MainActivity : Activity() {
                         priceInput.error = "Enter a valid current price"
                     averageCost == null || averageCost < 0.0 ->
                         averageCostInput.error = "Enter a valid average cost"
+                    targetPercent == null || targetPercent < 0.0 || targetPercent > 100.0 ->
+                        targetInput.error = "Target must be between 0 and 100"
                     else -> {
                         val assets = loadAssets()
-                        val updated = Asset(name, category, quantity, price, averageCost)
+                        val updated = Asset(name, category, quantity, price, averageCost, targetPercent)
 
                         if (isEditing && index != null && index in assets.indices) {
                             assets[index] = updated
@@ -546,6 +617,7 @@ class MainActivity : Activity() {
         parent: LinearLayout,
         asset: Asset,
         allocation: Double,
+        totalPortfolioValue: Double,
         index: Int
     ) {
         val card = LinearLayout(this).apply {
@@ -628,10 +700,54 @@ class MainActivity : Activity() {
 
         card.addView(
             TextView(this).apply {
-                text = String.format(Locale.US, "Allocation: %.1f%%", allocation)
+                text = String.format(
+                    Locale.US,
+                    "Allocation: %.1f%%  •  Target: %.1f%%",
+                    allocation,
+                    asset.targetPercent
+                )
                 textSize = 14f
                 setTextColor(Color.GRAY)
-                setPadding(0, dp(2), 0, dp(8))
+                setPadding(0, dp(2), 0, dp(2))
+            }
+        )
+
+        val gap = allocation - asset.targetPercent
+        card.addView(
+            TextView(this).apply {
+                text = String.format(Locale.US, "Distance to target: %+.1f%%", gap)
+                textSize = 13f
+                setTextColor(
+                    if (kotlin.math.abs(gap) <= targetTolerancePercent) {
+                        Color.rgb(25, 125, 70)
+                    } else {
+                        Color.rgb(185, 110, 25)
+                    }
+                )
+                setPadding(0, 0, 0, dp(3))
+            }
+        )
+
+        val desiredValue = totalPortfolioValue * asset.targetPercent / 100.0
+        val rebalanceAmount = desiredValue - asset.value
+        card.addView(
+            TextView(this).apply {
+                text = when {
+                    asset.targetPercent <= 0.0 -> "Rebalance: No target set"
+                    kotlin.math.abs(gap) <= targetTolerancePercent -> "Rebalance: On target"
+                    rebalanceAmount > 0.0 -> "Rebalance: Buy about " + formatToman(rebalanceAmount)
+                    else -> "Rebalance: Sell about " + formatToman(kotlin.math.abs(rebalanceAmount))
+                }
+                textSize = 13f
+                setTypeface(typeface, Typeface.BOLD)
+                setTextColor(
+                    if (kotlin.math.abs(gap) <= targetTolerancePercent && asset.targetPercent > 0.0) {
+                        Color.rgb(25, 125, 70)
+                    } else {
+                        Color.DKGRAY
+                    }
+                )
+                setPadding(0, 0, 0, dp(8))
             }
         )
 
