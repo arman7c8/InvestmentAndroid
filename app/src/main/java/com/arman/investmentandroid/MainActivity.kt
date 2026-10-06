@@ -21,6 +21,8 @@ import android.widget.TextView
 import android.widget.Toast
 import org.json.JSONArray
 import org.json.JSONObject
+import java.net.HttpURLConnection
+import java.net.URL
 import java.text.NumberFormat
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -35,7 +37,9 @@ class MainActivity : Activity() {
         val price: Double,
         val averageCost: Double,
         val targetPercent: Double,
-        val includeInTarget: Boolean
+        val includeInTarget: Boolean,
+        val priceSource: String,
+        val symbol: String
     ) {
         val value: Double
             get() = quantity * price
@@ -66,9 +70,11 @@ class MainActivity : Activity() {
     private val transactionsKey = "transactions_json"
     private val snapshotsKey = "snapshots_json"
     private val toleranceKey = "rebalance_tolerance"
+    private val lastPriceUpdateKey = "last_price_update"
     private val exportBackupRequestCode = 1001
     private val importBackupRequestCode = 1002
     private val categories = listOf("Cash", "Gold", "Stocks", "Crypto", "Fund", "Other")
+    private val priceSources = listOf("Manual", "Nobitex")
     private val defaultTolerancePercent = 1.0
     private var onPortfolioScreen = false
     private var onPriceCenterScreen = false
@@ -84,10 +90,10 @@ class MainActivity : Activity() {
 
     private fun demoAssets(): List<Asset> =
         listOf(
-            Asset("Cash", "Cash", 1.0, 250_000_000.0, 250_000_000.0, 20.0, true),
-            Asset("Gold", "Gold", 1.0, 375_000_000.0, 340_000_000.0, 30.0, true),
-            Asset("Stocks", "Stocks", 1.0, 250_000_000.0, 265_000_000.0, 20.0, true),
-            Asset("Crypto", "Crypto", 1.0, 375_000_000.0, 330_000_000.0, 30.0, true)
+            Asset("Cash", "Cash", 1.0, 250_000_000.0, 250_000_000.0, 20.0, true, "Manual", ""),
+            Asset("Gold", "Gold", 1.0, 375_000_000.0, 340_000_000.0, 30.0, true, "Manual", ""),
+            Asset("Stocks", "Stocks", 1.0, 250_000_000.0, 265_000_000.0, 20.0, true, "Manual", ""),
+            Asset("Crypto", "Crypto", 1.0, 375_000_000.0, 330_000_000.0, 30.0, true, "Manual", "")
         )
 
     private fun inferCategory(name: String): String {
@@ -170,6 +176,20 @@ class MainActivity : Activity() {
                             true
                         }
 
+                        val priceSource = if (item.has("priceSource")) {
+                            item.optString("priceSource", "Manual")
+                        } else {
+                            migratedLegacyData = true
+                            "Manual"
+                        }
+
+                        val symbol = if (item.has("symbol")) {
+                            item.optString("symbol", "")
+                        } else {
+                            migratedLegacyData = true
+                            ""
+                        }
+
                         assets.add(
                             Asset(
                                 name = name,
@@ -178,7 +198,9 @@ class MainActivity : Activity() {
                                 price = price,
                                 averageCost = averageCost,
                                 targetPercent = targetPercent,
-                                includeInTarget = includeInTarget
+                                includeInTarget = includeInTarget,
+                                priceSource = priceSource,
+                                symbol = symbol
                             )
                         )
                     }
@@ -193,7 +215,9 @@ class MainActivity : Activity() {
                                 price = legacyAmount,
                                 averageCost = legacyAmount,
                                 targetPercent = defaultTargetPercent(name, category),
-                                includeInTarget = true
+                                includeInTarget = true,
+                                priceSource = "Manual",
+                                symbol = ""
                             )
                         )
                         migratedLegacyData = true
@@ -223,6 +247,8 @@ class MainActivity : Activity() {
                     put("averageCost", asset.averageCost)
                     put("targetPercent", asset.targetPercent)
                     put("includeInTarget", asset.includeInTarget)
+                    put("priceSource", asset.priceSource)
+                    put("symbol", asset.symbol)
                 }
             )
         }
@@ -361,6 +387,18 @@ class MainActivity : Activity() {
             .apply()
     }
 
+    private fun markPriceUpdate() {
+        getSharedPreferences(prefsName, MODE_PRIVATE)
+            .edit()
+            .putLong(lastPriceUpdateKey, System.currentTimeMillis())
+            .apply()
+    }
+
+    private fun loadLastPriceUpdate(): Long {
+        return getSharedPreferences(prefsName, MODE_PRIVATE)
+            .getLong(lastPriceUpdateKey, 0L)
+    }
+
     private fun showWelcomeScreen() {
         onPortfolioScreen = false
         onPriceCenterScreen = false
@@ -483,6 +521,18 @@ class MainActivity : Activity() {
                 setPadding(0, 0, 0, dp(8))
             }
         )
+
+        val lastPriceUpdate = loadLastPriceUpdate()
+        if (lastPriceUpdate > 0L) {
+            container.addView(
+                TextView(this).apply {
+                    text = "Last price update: " + formatDate(lastPriceUpdate)
+                    textSize = 12f
+                    setTextColor(Color.GRAY)
+                    setPadding(0, 0, 0, dp(5))
+                }
+            )
+        }
 
         if (snapshotChange != null) {
             container.addView(
@@ -928,6 +978,25 @@ class MainActivity : Activity() {
             setText(existing?.let { it.averageCost.toLong().toString() } ?: "")
         }
 
+        val priceSourceSpinner = Spinner(this)
+        val priceSourceAdapter = ArrayAdapter(
+            this,
+            android.R.layout.simple_spinner_item,
+            priceSources
+        ).apply {
+            setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item)
+        }
+        priceSourceSpinner.adapter = priceSourceAdapter
+        val selectedSource = existing?.priceSource ?: "Manual"
+        val sourceIndex = priceSources.indexOf(selectedSource).let { if (it >= 0) it else 0 }
+        priceSourceSpinner.setSelection(sourceIndex)
+
+        val symbolInput = EditText(this).apply {
+            hint = "Market symbol (e.g. BTC, ETH, SOL)"
+            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_CAP_CHARACTERS
+            setText(existing?.symbol ?: "")
+        }
+
         val includeTargetCheck = CheckBox(this).apply {
             text = "Include in target allocation"
             isChecked = existing?.includeInTarget ?: true
@@ -945,6 +1014,8 @@ class MainActivity : Activity() {
         form.addView(quantityInput)
         form.addView(priceInput)
         form.addView(averageCostInput)
+        form.addView(priceSourceSpinner)
+        form.addView(symbolInput)
         form.addView(includeTargetCheck)
         form.addView(targetInput)
 
@@ -965,6 +1036,8 @@ class MainActivity : Activity() {
                 val averageCostText = averageCostInput.text.toString().trim().replace(",", "")
                 val averageCost = if (averageCostText.isBlank()) price else averageCostText.toDoubleOrNull()
                 val targetPercent = targetInput.text.toString().trim().replace(",", "").toDoubleOrNull()
+                val priceSource = priceSourceSpinner.selectedItem.toString()
+                val symbol = symbolInput.text.toString().trim().uppercase(Locale.US)
 
                 when {
                     name.isEmpty() -> nameInput.error = "Enter an asset name"
@@ -976,6 +1049,10 @@ class MainActivity : Activity() {
                         averageCostInput.error = "Enter a valid average cost"
                     targetPercent == null || targetPercent < 0.0 || targetPercent > 100.0 ->
                         targetInput.error = "Target must be between 0 and 100"
+                    priceSource == "Nobitex" && symbol.isBlank() ->
+                        symbolInput.error = "Enter a Nobitex market symbol"
+                    priceSource == "Nobitex" && category != "Crypto" ->
+                        symbolInput.error = "Nobitex source is currently for Crypto assets"
                     else -> {
                         val assets = loadAssets()
                         val updated = Asset(
@@ -985,7 +1062,9 @@ class MainActivity : Activity() {
                             price,
                             averageCost,
                             targetPercent,
-                            includeTargetCheck.isChecked
+                            includeTargetCheck.isChecked,
+                            priceSource,
+                            symbol
                         )
 
                         if (isEditing && index != null && index in assets.indices) {
@@ -1042,7 +1121,15 @@ class MainActivity : Activity() {
 
         card.addView(
             TextView(this).apply {
-                text = asset.category
+                text = buildString {
+                    append(asset.category)
+                    append(" • ")
+                    append(asset.priceSource)
+                    if (asset.symbol.isNotBlank()) {
+                        append(" • ")
+                        append(asset.symbol)
+                    }
+                }
                 textSize = 13f
                 setTextColor(Color.GRAY)
                 setPadding(0, dp(3), 0, dp(5))
@@ -1386,7 +1473,17 @@ class MainActivity : Activity() {
 
             row.addView(
                 TextView(this).apply {
-                    text = asset.name + " • " + asset.category
+                    text = buildString {
+                        append(asset.name)
+                        append(" • ")
+                        append(asset.category)
+                        append(" • ")
+                        append(asset.priceSource)
+                        if (asset.symbol.isNotBlank()) {
+                            append(" • ")
+                            append(asset.symbol)
+                        }
+                    }
                     textSize = 15f
                     setTypeface(typeface, Typeface.BOLD)
                     setTextColor(Color.DKGRAY)
@@ -1433,10 +1530,17 @@ class MainActivity : Activity() {
                 if (!invalid) {
                     saveAssets(updatedAssets)
                     recordSnapshot(updatedAssets)
+                    markPriceUpdate()
                     Toast.makeText(this@MainActivity, "All prices updated.", Toast.LENGTH_SHORT).show()
                     showPortfolioScreen()
                 }
             }
+        }
+
+        val apiButton = Button(this).apply {
+            text = "Update Nobitex Prices"
+            isAllCaps = false
+            setOnClickListener { updateNobitexPrices() }
         }
 
         val backButton = Button(this).apply {
@@ -1446,6 +1550,15 @@ class MainActivity : Activity() {
         }
 
         container.addView(saveButton)
+        container.addView(
+            apiButton,
+            LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            ).apply {
+                topMargin = dp(8)
+            }
+        )
         container.addView(
             backButton,
             LinearLayout.LayoutParams(
@@ -1461,6 +1574,152 @@ class MainActivity : Activity() {
                 addView(container)
             }
         )
+    }
+
+    private fun httpGet(urlText: String): String {
+        val connection = URL(urlText).openConnection() as HttpURLConnection
+        try {
+            connection.requestMethod = "GET"
+            connection.connectTimeout = 12_000
+            connection.readTimeout = 12_000
+            connection.setRequestProperty("Accept", "application/json")
+            connection.setRequestProperty("User-Agent", "InvestmentAndroid/0.9")
+            val code = connection.responseCode
+            if (code !in 200..299) {
+                throw IllegalStateException("HTTP " + code)
+            }
+            return connection.inputStream.bufferedReader().use { it.readText() }
+        } finally {
+            connection.disconnect()
+        }
+    }
+
+    private fun updateNobitexPrices() {
+        val currentAssets = loadAssets()
+        val apiEntries = currentAssets.withIndex().filter {
+            it.value.priceSource == "Nobitex" &&
+                it.value.category == "Crypto" &&
+                it.value.symbol.isNotBlank()
+        }
+
+        if (apiEntries.isEmpty()) {
+            AlertDialog.Builder(this)
+                .setTitle("Nobitex")
+                .setMessage("No Crypto assets are configured with Nobitex as their price source.")
+                .setPositiveButton("OK", null)
+                .show()
+            return
+        }
+
+        Toast.makeText(this, "Updating Nobitex prices...", Toast.LENGTH_SHORT).show()
+
+        Thread {
+            try {
+                val symbols = apiEntries
+                    .map { it.value.symbol.lowercase(Locale.US) }
+                    .filter { it != "usdt" }
+                    .distinct()
+
+                val usdtResponse = httpGet(
+                    "https://api.nobitex.ir/market/stats?srcCurrency=usdt&dstCurrency=rls"
+                )
+                val usdtRoot = JSONObject(usdtResponse)
+                if (usdtRoot.optString("status") != "ok") {
+                    throw IllegalStateException("Nobitex USDT market returned an error.")
+                }
+
+                val usdtRls = usdtRoot
+                    .getJSONObject("stats")
+                    .getJSONObject("usdt-rls")
+                    .getString("latest")
+                    .toDouble()
+
+                val usdtToman = usdtRls / 10.0
+
+                val cryptoStats = if (symbols.isNotEmpty()) {
+                    val joined = symbols.joinToString(",")
+                    val response = httpGet(
+                        "https://api.nobitex.ir/market/stats?srcCurrency=" +
+                            joined +
+                            "&dstCurrency=usdt"
+                    )
+                    val root = JSONObject(response)
+                    if (root.optString("status") != "ok") {
+                        throw IllegalStateException("Nobitex crypto market returned an error.")
+                    }
+                    root.getJSONObject("stats")
+                } else {
+                    JSONObject()
+                }
+
+                val updatedAssets = loadAssets()
+                val updatedNames = mutableListOf<String>()
+                val failedNames = mutableListOf<String>()
+
+                apiEntries.forEach { indexed ->
+                    val index = indexed.index
+                    val asset = indexed.value
+                    val symbol = asset.symbol.lowercase(Locale.US)
+
+                    try {
+                        val priceToman = if (symbol == "usdt") {
+                            usdtToman
+                        } else {
+                            val key = symbol + "-usdt"
+                            val usdtPrice = cryptoStats
+                                .getJSONObject(key)
+                                .getString("latest")
+                                .toDouble()
+                            usdtPrice * usdtToman
+                        }
+
+                        if (index in updatedAssets.indices && priceToman >= 0.0) {
+                            updatedAssets[index] = updatedAssets[index].copy(price = priceToman)
+                            updatedNames.add(asset.name)
+                        } else {
+                            failedNames.add(asset.name)
+                        }
+                    } catch (_: Exception) {
+                        failedNames.add(asset.name)
+                    }
+                }
+
+                if (updatedNames.isEmpty()) {
+                    throw IllegalStateException("No configured Nobitex prices could be updated.")
+                }
+
+                saveAssets(updatedAssets)
+                recordSnapshot(updatedAssets)
+                markPriceUpdate()
+
+                runOnUiThread {
+                    val message = buildString {
+                        append("Updated: ")
+                        append(updatedNames.joinToString(", "))
+                        append("\nUSDT rate: ")
+                        append(formatToman(usdtToman))
+                        if (failedNames.isNotEmpty()) {
+                            append("\nFailed: ")
+                            append(failedNames.joinToString(", "))
+                        }
+                    }
+
+                    AlertDialog.Builder(this)
+                        .setTitle("Nobitex Update")
+                        .setMessage(message)
+                        .setPositiveButton("OK") { _, _ -> showPortfolioScreen() }
+                        .show()
+                }
+            } catch (error: Exception) {
+                runOnUiThread {
+                    AlertDialog.Builder(this)
+                        .setTitle("Nobitex Update Failed")
+                        .setMessage(error.message ?: "Could not update market prices.")
+                        .setPositiveButton("OK", null)
+                        .show()
+                }
+            }
+        }.start()
     }
 
     private fun showCashBalanceDialog(index: Int, asset: Asset) {
