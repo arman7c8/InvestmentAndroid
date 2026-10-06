@@ -2,6 +2,7 @@ package com.arman.investmentandroid
 
 import android.app.Activity
 import android.app.AlertDialog
+import android.content.Intent
 import android.graphics.Color
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
@@ -11,6 +12,7 @@ import android.view.Gravity
 import android.view.ViewGroup
 import android.widget.ArrayAdapter
 import android.widget.Button
+import android.widget.CheckBox
 import android.widget.EditText
 import android.widget.LinearLayout
 import android.widget.ScrollView
@@ -32,16 +34,17 @@ class MainActivity : Activity() {
         val quantity: Double,
         val price: Double,
         val averageCost: Double,
-        val targetPercent: Double
+        val targetPercent: Double,
+        val includeInTarget: Boolean
     ) {
         val value: Double
             get() = quantity * price
 
         val invested: Double
-            get() = quantity * averageCost
+            get() = if (category == "Cash") value else quantity * averageCost
 
         val profit: Double
-            get() = value - invested
+            get() = if (category == "Cash") 0.0 else value - invested
     }
 
     data class Transaction(
@@ -53,13 +56,22 @@ class MainActivity : Activity() {
         val timestamp: Long
     )
 
+    data class Snapshot(
+        val totalValue: Double,
+        val timestamp: Long
+    )
+
     private val prefsName = "investment_android_prefs"
     private val assetsKey = "assets_json"
     private val transactionsKey = "transactions_json"
+    private val snapshotsKey = "snapshots_json"
     private val toleranceKey = "rebalance_tolerance"
+    private val exportBackupRequestCode = 1001
+    private val importBackupRequestCode = 1002
     private val categories = listOf("Cash", "Gold", "Stocks", "Crypto", "Fund", "Other")
     private val defaultTolerancePercent = 1.0
     private var onPortfolioScreen = false
+    private var onPriceCenterScreen = false
 
     private fun dp(value: Int): Int =
         (value * resources.displayMetrics.density).toInt()
@@ -72,10 +84,10 @@ class MainActivity : Activity() {
 
     private fun demoAssets(): List<Asset> =
         listOf(
-            Asset("Cash", "Cash", 1.0, 250_000_000.0, 250_000_000.0, 20.0),
-            Asset("Gold", "Gold", 1.0, 375_000_000.0, 340_000_000.0, 30.0),
-            Asset("Stocks", "Stocks", 1.0, 250_000_000.0, 265_000_000.0, 20.0),
-            Asset("Crypto", "Crypto", 1.0, 375_000_000.0, 330_000_000.0, 30.0)
+            Asset("Cash", "Cash", 1.0, 250_000_000.0, 250_000_000.0, 20.0, true),
+            Asset("Gold", "Gold", 1.0, 375_000_000.0, 340_000_000.0, 30.0, true),
+            Asset("Stocks", "Stocks", 1.0, 250_000_000.0, 265_000_000.0, 20.0, true),
+            Asset("Crypto", "Crypto", 1.0, 375_000_000.0, 330_000_000.0, 30.0, true)
         )
 
     private fun inferCategory(name: String): String {
@@ -108,6 +120,9 @@ class MainActivity : Activity() {
         }
         if (!prefs.contains(transactionsKey)) {
             saveTransactions(emptyList())
+        }
+        if (!prefs.contains(snapshotsKey)) {
+            saveSnapshots(emptyList())
         }
     }
 
@@ -148,6 +163,13 @@ class MainActivity : Activity() {
                             defaultTargetPercent(name, category)
                         }
 
+                        val includeInTarget = if (item.has("includeInTarget")) {
+                            item.optBoolean("includeInTarget", true)
+                        } else {
+                            migratedLegacyData = true
+                            true
+                        }
+
                         assets.add(
                             Asset(
                                 name = name,
@@ -155,7 +177,8 @@ class MainActivity : Activity() {
                                 quantity = item.optDouble("quantity", 1.0),
                                 price = price,
                                 averageCost = averageCost,
-                                targetPercent = targetPercent
+                                targetPercent = targetPercent,
+                                includeInTarget = includeInTarget
                             )
                         )
                     }
@@ -169,7 +192,8 @@ class MainActivity : Activity() {
                                 quantity = 1.0,
                                 price = legacyAmount,
                                 averageCost = legacyAmount,
-                                targetPercent = defaultTargetPercent(name, category)
+                                targetPercent = defaultTargetPercent(name, category),
+                                includeInTarget = true
                             )
                         )
                         migratedLegacyData = true
@@ -198,6 +222,7 @@ class MainActivity : Activity() {
                     put("price", asset.price)
                     put("averageCost", asset.averageCost)
                     put("targetPercent", asset.targetPercent)
+                    put("includeInTarget", asset.includeInTarget)
                 }
             )
         }
@@ -253,6 +278,52 @@ class MainActivity : Activity() {
             .apply()
     }
 
+    private fun loadSnapshots(): MutableList<Snapshot> {
+        val raw = getSharedPreferences(prefsName, MODE_PRIVATE)
+            .getString(snapshotsKey, "[]") ?: "[]"
+
+        return try {
+            val array = JSONArray(raw)
+            MutableList(array.length()) { index ->
+                val item = array.getJSONObject(index)
+                Snapshot(
+                    totalValue = item.optDouble("totalValue", 0.0),
+                    timestamp = item.optLong("timestamp", System.currentTimeMillis())
+                )
+            }
+        } catch (_: Exception) {
+            mutableListOf()
+        }
+    }
+
+    private fun saveSnapshots(snapshots: List<Snapshot>) {
+        val array = JSONArray()
+        snapshots.takeLast(100).forEach { snapshot ->
+            array.put(
+                JSONObject().apply {
+                    put("totalValue", snapshot.totalValue)
+                    put("timestamp", snapshot.timestamp)
+                }
+            )
+        }
+
+        getSharedPreferences(prefsName, MODE_PRIVATE)
+            .edit()
+            .putString(snapshotsKey, array.toString())
+            .apply()
+    }
+
+    private fun recordSnapshot(assets: List<Asset>) {
+        val snapshots = loadSnapshots()
+        snapshots.add(
+            Snapshot(
+                totalValue = assets.sumOf { it.value },
+                timestamp = System.currentTimeMillis()
+            )
+        )
+        saveSnapshots(snapshots)
+    }
+
     private fun formatToman(value: Double): String {
         val formatter = NumberFormat.getNumberInstance(Locale.US).apply {
             maximumFractionDigits = 0
@@ -292,6 +363,7 @@ class MainActivity : Activity() {
 
     private fun showWelcomeScreen() {
         onPortfolioScreen = false
+        onPriceCenterScreen = false
 
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
@@ -338,12 +410,21 @@ class MainActivity : Activity() {
 
     private fun showPortfolioScreen() {
         onPortfolioScreen = true
+        onPriceCenterScreen = false
         val assets = loadAssets()
         val totalValue = assets.sumOf { it.value }
         val totalInvested = assets.sumOf { it.invested }
         val totalProfit = totalValue - totalInvested
-        val totalTarget = assets.sumOf { it.targetPercent }
+        val targetAssets = assets.filter { it.includeInTarget }
+        val targetPortfolioValue = targetAssets.sumOf { it.value }
+        val totalTarget = targetAssets.sumOf { it.targetPercent }
         val tolerance = loadTolerance()
+        val snapshots = loadSnapshots()
+        val snapshotChange = if (snapshots.size >= 2) {
+            snapshots.last().totalValue - snapshots[snapshots.lastIndex - 1].totalValue
+        } else {
+            null
+        }
 
         val container = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
@@ -403,6 +484,23 @@ class MainActivity : Activity() {
             }
         )
 
+        if (snapshotChange != null) {
+            container.addView(
+                TextView(this).apply {
+                    text = "Change since previous snapshot: " + formatSignedToman(snapshotChange)
+                    textSize = 13f
+                    setTextColor(
+                        when {
+                            snapshotChange > 0.0 -> Color.rgb(25, 125, 70)
+                            snapshotChange < 0.0 -> Color.rgb(180, 45, 45)
+                            else -> Color.GRAY
+                        }
+                    )
+                    setPadding(0, 0, 0, dp(8))
+                }
+            )
+        }
+
         container.addView(
             TextView(this).apply {
                 text = String.format(Locale.US, "Target total: %.1f%%", totalTarget)
@@ -458,11 +556,17 @@ class MainActivity : Activity() {
                     } else {
                         0.0
                     }
+                    val targetAllocation = if (asset.includeInTarget && targetPortfolioValue > 0.0) {
+                        asset.value / targetPortfolioValue * 100.0
+                    } else {
+                        0.0
+                    }
                     addAssetCard(
                         parent = container,
                         asset = asset,
                         allocation = allocation,
-                        totalPortfolioValue = totalValue,
+                        targetAllocation = targetAllocation,
+                        targetPortfolioValue = targetPortfolioValue,
                         tolerancePercent = tolerance,
                         index = indexedAsset.index
                     )
@@ -474,6 +578,13 @@ class MainActivity : Activity() {
             isAllCaps = false
             textSize = 16f
             setOnClickListener { showAssetDialog() }
+        }
+
+        val priceCenterButton = Button(this).apply {
+            text = "Price Center"
+            isAllCaps = false
+            textSize = 16f
+            setOnClickListener { showPriceCenterScreen() }
         }
 
         val targetsButton = Button(this).apply {
@@ -490,6 +601,27 @@ class MainActivity : Activity() {
             setOnClickListener { showToleranceDialog() }
         }
 
+        val activityButton = Button(this).apply {
+            text = "Activity"
+            isAllCaps = false
+            textSize = 16f
+            setOnClickListener { showActivityDialog() }
+        }
+
+        val historyButton = Button(this).apply {
+            text = "Portfolio History"
+            isAllCaps = false
+            textSize = 16f
+            setOnClickListener { showHistoryDialog() }
+        }
+
+        val backupButton = Button(this).apply {
+            text = "Backup / Restore"
+            isAllCaps = false
+            textSize = 16f
+            setOnClickListener { showBackupDialog() }
+        }
+
         val resetButton = Button(this).apply {
             text = "Reset Demo Data"
             isAllCaps = false
@@ -501,6 +633,7 @@ class MainActivity : Activity() {
                     .setPositiveButton("Reset") { _, _ ->
                         saveAssets(demoAssets())
                         saveTransactions(emptyList())
+                        saveSnapshots(emptyList())
                         showPortfolioScreen()
                     }
                     .show()
@@ -520,11 +653,14 @@ class MainActivity : Activity() {
             topMargin = dp(10)
         }
 
-        addRebalanceSummary(container, assets, totalValue, totalTarget, tolerance)
+        addRebalanceSummary(container, targetAssets, targetPortfolioValue, totalTarget, tolerance)
         container.addView(addButton, buttonParams)
+        container.addView(priceCenterButton, buttonParams)
         container.addView(targetsButton, buttonParams)
         container.addView(toleranceButton, buttonParams)
-        addRecentActivity(container)
+        container.addView(activityButton, buttonParams)
+        container.addView(historyButton, buttonParams)
+        container.addView(backupButton, buttonParams)
         container.addView(resetButton, buttonParams)
         container.addView(backButton, buttonParams)
 
@@ -537,8 +673,9 @@ class MainActivity : Activity() {
 
     private fun showTargetsDialog() {
         val assets = loadAssets()
-        if (assets.isEmpty()) {
-            Toast.makeText(this, "Add at least one asset first.", Toast.LENGTH_SHORT).show()
+        val targetEntries = assets.withIndex().filter { it.value.includeInTarget }
+        if (targetEntries.isEmpty()) {
+            Toast.makeText(this, "No assets are included in target allocation.", Toast.LENGTH_SHORT).show()
             return
         }
 
@@ -549,7 +686,9 @@ class MainActivity : Activity() {
 
         val inputs = mutableListOf<Pair<Int, EditText>>()
 
-        assets.forEachIndexed { index, asset ->
+        targetEntries.forEach { indexed ->
+            val index = indexed.index
+            val asset = indexed.value
             form.addView(
                 TextView(this).apply {
                     text = asset.name
@@ -789,6 +928,12 @@ class MainActivity : Activity() {
             setText(existing?.let { it.averageCost.toLong().toString() } ?: "")
         }
 
+        val includeTargetCheck = CheckBox(this).apply {
+            text = "Include in target allocation"
+            isChecked = existing?.includeInTarget ?: true
+            setPadding(0, dp(6), 0, 0)
+        }
+
         val targetInput = EditText(this).apply {
             hint = "Target allocation (%)"
             inputType = InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_FLAG_DECIMAL
@@ -800,6 +945,7 @@ class MainActivity : Activity() {
         form.addView(quantityInput)
         form.addView(priceInput)
         form.addView(averageCostInput)
+        form.addView(includeTargetCheck)
         form.addView(targetInput)
 
         val isEditing = index != null && existing != null
@@ -832,7 +978,15 @@ class MainActivity : Activity() {
                         targetInput.error = "Target must be between 0 and 100"
                     else -> {
                         val assets = loadAssets()
-                        val updated = Asset(name, category, quantity, price, averageCost, targetPercent)
+                        val updated = Asset(
+                            name,
+                            category,
+                            quantity,
+                            price,
+                            averageCost,
+                            targetPercent,
+                            includeTargetCheck.isChecked
+                        )
 
                         if (isEditing && index != null && index in assets.indices) {
                             assets[index] = updated
@@ -861,7 +1015,8 @@ class MainActivity : Activity() {
         parent: LinearLayout,
         asset: Asset,
         allocation: Double,
-        totalPortfolioValue: Double,
+        targetAllocation: Double,
+        targetPortfolioValue: Double,
         tolerancePercent: Double,
         index: Int
     ) {
@@ -945,25 +1100,34 @@ class MainActivity : Activity() {
 
         card.addView(
             TextView(this).apply {
-                text = String.format(
-                    Locale.US,
-                    "Allocation: %.1f%%  •  Target: %.1f%%",
-                    allocation,
-                    asset.targetPercent
-                )
+                text = if (asset.includeInTarget) {
+                    String.format(
+                        Locale.US,
+                        "Portfolio: %.1f%%  •  Target pool: %.1f%%  •  Target: %.1f%%",
+                        allocation,
+                        targetAllocation,
+                        asset.targetPercent
+                    )
+                } else {
+                    String.format(Locale.US, "Portfolio: %.1f%%  •  Target: Excluded", allocation)
+                }
                 textSize = 14f
                 setTextColor(Color.GRAY)
                 setPadding(0, dp(2), 0, dp(2))
             }
         )
 
-        val gap = allocation - asset.targetPercent
+        val gap = if (asset.includeInTarget) targetAllocation - asset.targetPercent else 0.0
         card.addView(
             TextView(this).apply {
-                text = String.format(Locale.US, "Distance to target: %+.1f%%", gap)
+                text = if (asset.includeInTarget) {
+                    String.format(Locale.US, "Distance to target: %+.1f%%", gap)
+                } else {
+                    "Distance to target: Not applicable"
+                }
                 textSize = 13f
                 setTextColor(
-                    if (kotlin.math.abs(gap) <= tolerancePercent) {
+                    if (!asset.includeInTarget || kotlin.math.abs(gap) <= tolerancePercent) {
                         Color.rgb(25, 125, 70)
                     } else {
                         Color.rgb(185, 110, 25)
@@ -973,11 +1137,12 @@ class MainActivity : Activity() {
             }
         )
 
-        val desiredValue = totalPortfolioValue * asset.targetPercent / 100.0
+        val desiredValue = targetPortfolioValue * asset.targetPercent / 100.0
         val rebalanceAmount = desiredValue - asset.value
         card.addView(
             TextView(this).apply {
                 text = when {
+                    !asset.includeInTarget -> "Rebalance: Excluded from target"
                     asset.targetPercent <= 0.0 -> "Rebalance: No target set"
                     kotlin.math.abs(gap) <= tolerancePercent -> "Rebalance: On target"
                     rebalanceAmount > 0.0 -> "Rebalance: Buy about " + formatToman(rebalanceAmount)
@@ -986,7 +1151,7 @@ class MainActivity : Activity() {
                 textSize = 13f
                 setTypeface(typeface, Typeface.BOLD)
                 setTextColor(
-                    if (kotlin.math.abs(gap) <= tolerancePercent && asset.targetPercent > 0.0) {
+                    if ((!asset.includeInTarget || kotlin.math.abs(gap) <= tolerancePercent) && asset.targetPercent > 0.0) {
                         Color.rgb(25, 125, 70)
                     } else {
                         Color.DKGRAY
@@ -1025,7 +1190,22 @@ class MainActivity : Activity() {
             }
         )
 
-        card.addView(transactionRow)
+        if (asset.category == "Cash") {
+            val balanceButton = Button(this).apply {
+                text = "Set Final Balance"
+                isAllCaps = false
+                setOnClickListener { showCashBalanceDialog(index, asset) }
+            }
+            card.addView(
+                balanceButton,
+                LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.WRAP_CONTENT
+                )
+            )
+        } else {
+            card.addView(transactionRow)
+        }
 
         card.addView(
             TextView(this).apply {
@@ -1151,6 +1331,7 @@ class MainActivity : Activity() {
 
                         saveAssets(assets)
                         saveTransactions(transactions)
+                        recordSnapshot(assets)
                         dialog.dismiss()
                         showPortfolioScreen()
                     }
@@ -1159,6 +1340,369 @@ class MainActivity : Activity() {
         }
 
         dialog.show()
+    }
+
+    private fun showPriceCenterScreen() {
+        onPortfolioScreen = false
+        onPriceCenterScreen = true
+        val assets = loadAssets()
+
+        val container = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(20), dp(24), dp(20), dp(24))
+            setBackgroundColor(Color.rgb(248, 249, 250))
+        }
+
+        container.addView(
+            TextView(this).apply {
+                text = "Price Center"
+                textSize = 28f
+                setTypeface(typeface, Typeface.BOLD)
+                setTextColor(Color.rgb(30, 30, 30))
+            }
+        )
+
+        container.addView(
+            TextView(this).apply {
+                text = "Update all current prices in one place."
+                textSize = 14f
+                setTextColor(Color.GRAY)
+                setPadding(0, dp(6), 0, dp(16))
+            }
+        )
+
+        val inputs = mutableListOf<Pair<Int, EditText>>()
+
+        assets.forEachIndexed { index, asset ->
+            val row = LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL
+                setPadding(dp(14), dp(10), dp(14), dp(10))
+                background = GradientDrawable().apply {
+                    setColor(Color.WHITE)
+                    cornerRadius = dp(10).toFloat()
+                    setStroke(dp(1), Color.rgb(230, 230, 230))
+                }
+            }
+
+            row.addView(
+                TextView(this).apply {
+                    text = asset.name + " • " + asset.category
+                    textSize = 15f
+                    setTypeface(typeface, Typeface.BOLD)
+                    setTextColor(Color.DKGRAY)
+                }
+            )
+
+            val input = EditText(this).apply {
+                hint = "Current price (Toman)"
+                inputType = InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_FLAG_DECIMAL
+                setText(asset.price.toLong().toString())
+            }
+
+            inputs.add(index to input)
+            row.addView(input)
+
+            container.addView(
+                row,
+                LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.WRAP_CONTENT
+                ).apply {
+                    bottomMargin = dp(8)
+                }
+            )
+        }
+
+        val saveButton = Button(this).apply {
+            text = "Save All Prices"
+            isAllCaps = false
+            setOnClickListener {
+                val updatedAssets = loadAssets()
+                var invalid = false
+
+                inputs.forEach { (index, input) ->
+                    val value = input.text.toString().trim().replace(",", "").toDoubleOrNull()
+                    if (value == null || value < 0.0) {
+                        input.error = "Enter a valid price"
+                        invalid = true
+                    } else if (index in updatedAssets.indices) {
+                        updatedAssets[index] = updatedAssets[index].copy(price = value)
+                    }
+                }
+
+                if (!invalid) {
+                    saveAssets(updatedAssets)
+                    recordSnapshot(updatedAssets)
+                    Toast.makeText(this@MainActivity, "All prices updated.", Toast.LENGTH_SHORT).show()
+                    showPortfolioScreen()
+                }
+            }
+        }
+
+        val backButton = Button(this).apply {
+            text = "Back to Portfolio"
+            isAllCaps = false
+            setOnClickListener { showPortfolioScreen() }
+        }
+
+        container.addView(saveButton)
+        container.addView(
+            backButton,
+            LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            ).apply {
+                topMargin = dp(8)
+            }
+        )
+
+        setContentView(
+            ScrollView(this).apply {
+                addView(container)
+            }
+        )
+    }
+
+    private fun showCashBalanceDialog(index: Int, asset: Asset) {
+        val input = EditText(this).apply {
+            hint = "Final balance (Toman)"
+            inputType = InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_FLAG_DECIMAL
+            setText(asset.value.toLong().toString())
+            setPadding(dp(20), dp(8), dp(20), 0)
+        }
+
+        val dialog = AlertDialog.Builder(this)
+            .setTitle("Set " + asset.name + " Balance")
+            .setMessage("The app will infer the difference as income or expense.")
+            .setView(input)
+            .setNegativeButton("Cancel", null)
+            .setPositiveButton("Save", null)
+            .create()
+
+        dialog.setOnShowListener {
+            dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
+                val finalBalance = input.text.toString().trim().replace(",", "").toDoubleOrNull()
+                if (finalBalance == null || finalBalance < 0.0) {
+                    input.error = "Enter a valid balance"
+                    return@setOnClickListener
+                }
+
+                val assets = loadAssets()
+                if (index !in assets.indices) {
+                    dialog.dismiss()
+                    showPortfolioScreen()
+                    return@setOnClickListener
+                }
+
+                val current = assets[index]
+                val oldBalance = current.value
+                val difference = finalBalance - oldBalance
+
+                assets[index] = current.copy(
+                    quantity = 1.0,
+                    price = finalBalance,
+                    averageCost = finalBalance
+                )
+
+                if (kotlin.math.abs(difference) > 0.01) {
+                    val transactions = loadTransactions()
+                    transactions.add(
+                        Transaction(
+                            type = if (difference > 0.0) "INCOME" else "EXPENSE",
+                            assetName = current.name,
+                            quantity = 1.0,
+                            price = kotlin.math.abs(difference),
+                            realizedProfit = 0.0,
+                            timestamp = System.currentTimeMillis()
+                        )
+                    )
+                    saveTransactions(transactions)
+                }
+
+                saveAssets(assets)
+                recordSnapshot(assets)
+                dialog.dismiss()
+                showPortfolioScreen()
+            }
+        }
+
+        dialog.show()
+    }
+
+    private fun showActivityDialog() {
+        val content = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(16), dp(8), dp(16), dp(8))
+        }
+
+        addRecentActivity(content)
+
+        AlertDialog.Builder(this)
+            .setTitle("Activity")
+            .setView(
+                ScrollView(this).apply {
+                    addView(content)
+                }
+            )
+            .setPositiveButton("Close", null)
+            .show()
+    }
+
+    private fun showHistoryDialog() {
+        val snapshots = loadSnapshots().takeLast(30).reversed()
+        val content = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(16), dp(8), dp(16), dp(8))
+        }
+
+        if (snapshots.isEmpty()) {
+            content.addView(
+                TextView(this).apply {
+                    text = "No portfolio snapshots yet. Save prices in Price Center to create one."
+                    textSize = 14f
+                    setTextColor(Color.GRAY)
+                }
+            )
+        } else {
+            snapshots.forEachIndexed { index, snapshot ->
+                val previous = snapshots.getOrNull(index + 1)
+                val change = previous?.let { snapshot.totalValue - it.totalValue }
+
+                content.addView(
+                    TextView(this).apply {
+                        text = buildString {
+                            append(formatToman(snapshot.totalValue))
+                            if (change != null) {
+                                append("\nChange: ")
+                                append(formatSignedToman(change))
+                            }
+                            append("\n")
+                            append(formatDate(snapshot.timestamp))
+                        }
+                        textSize = 13f
+                        setTextColor(Color.DKGRAY)
+                        setPadding(dp(12), dp(10), dp(12), dp(10))
+                        background = GradientDrawable().apply {
+                            setColor(Color.WHITE)
+                            cornerRadius = dp(10).toFloat()
+                            setStroke(dp(1), Color.rgb(230, 230, 230))
+                        }
+                    },
+                    LinearLayout.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT,
+                        ViewGroup.LayoutParams.WRAP_CONTENT
+                    ).apply {
+                        bottomMargin = dp(8)
+                    }
+                )
+            }
+        }
+
+        AlertDialog.Builder(this)
+            .setTitle("Portfolio History")
+            .setView(
+                ScrollView(this).apply {
+                    addView(content)
+                }
+            )
+            .setPositiveButton("Close", null)
+            .show()
+    }
+
+    private fun showBackupDialog() {
+        AlertDialog.Builder(this)
+            .setTitle("Backup / Restore")
+            .setItems(arrayOf("Export Backup", "Import Backup")) { _, which ->
+                if (which == 0) {
+                    exportBackup()
+                } else {
+                    importBackup()
+                }
+            }
+            .setNegativeButton("Cancel", null)
+            .show()
+    }
+
+    private fun exportBackup() {
+        val intent = Intent(Intent.ACTION_CREATE_DOCUMENT).apply {
+            addCategory(Intent.CATEGORY_OPENABLE)
+            type = "application/json"
+            putExtra(Intent.EXTRA_TITLE, "InvestmentAndroid-backup.json")
+        }
+        startActivityForResult(intent, exportBackupRequestCode)
+    }
+
+    private fun importBackup() {
+        val intent = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
+            addCategory(Intent.CATEGORY_OPENABLE)
+            type = "application/json"
+        }
+        startActivityForResult(intent, importBackupRequestCode)
+    }
+
+    private fun createBackupJson(): String {
+        val prefs = getSharedPreferences(prefsName, MODE_PRIVATE)
+
+        return JSONObject().apply {
+            put("formatVersion", 1)
+            put("createdAt", System.currentTimeMillis())
+            put("assets", JSONArray(prefs.getString(assetsKey, "[]") ?: "[]"))
+            put("transactions", JSONArray(prefs.getString(transactionsKey, "[]") ?: "[]"))
+            put("snapshots", JSONArray(prefs.getString(snapshotsKey, "[]") ?: "[]"))
+            put("tolerance", loadTolerance())
+        }.toString(2)
+    }
+
+    private fun restoreBackupJson(raw: String) {
+        val root = JSONObject(raw)
+        val assets = root.getJSONArray("assets")
+        val transactions = root.optJSONArray("transactions") ?: JSONArray()
+        val snapshots = root.optJSONArray("snapshots") ?: JSONArray()
+        val tolerance = root.optDouble("tolerance", defaultTolerancePercent)
+
+        getSharedPreferences(prefsName, MODE_PRIVATE)
+            .edit()
+            .putString(assetsKey, assets.toString())
+            .putString(transactionsKey, transactions.toString())
+            .putString(snapshotsKey, snapshots.toString())
+            .putString(toleranceKey, tolerance.toString())
+            .apply()
+    }
+
+    @Deprecated("Deprecated in Java")
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        super.onActivityResult(requestCode, resultCode, data)
+
+        if (resultCode != RESULT_OK) {
+            return
+        }
+
+        val uri = data?.data ?: return
+
+        try {
+            when (requestCode) {
+                exportBackupRequestCode -> {
+                    contentResolver.openOutputStream(uri)?.bufferedWriter()?.use { writer ->
+                        writer.write(createBackupJson())
+                    }
+                    Toast.makeText(this, "Backup exported.", Toast.LENGTH_SHORT).show()
+                }
+
+                importBackupRequestCode -> {
+                    val raw = contentResolver.openInputStream(uri)?.bufferedReader()?.use { it.readText() }
+                        ?: throw IllegalArgumentException("Could not read backup file.")
+                    restoreBackupJson(raw)
+                    Toast.makeText(this, "Backup restored.", Toast.LENGTH_SHORT).show()
+                    showPortfolioScreen()
+                }
+            }
+        } catch (error: Exception) {
+            AlertDialog.Builder(this)
+                .setTitle("Backup Error")
+                .setMessage(error.message ?: "Could not process the backup file.")
+                .setPositiveButton("OK", null)
+                .show()
+        }
     }
 
     private fun addRecentActivity(parent: LinearLayout) {
@@ -1198,6 +1742,10 @@ class MainActivity : Activity() {
                 if (transaction.type == "SELL") {
                     append("\nRealized P/L: ")
                     append(formatSignedToman(transaction.realizedProfit))
+                } else if (transaction.type == "INCOME" || transaction.type == "EXPENSE") {
+                    append("\nBalance change: ")
+                    append(if (transaction.type == "INCOME") "+" else "-")
+                    append(formatToman(transaction.price))
                 }
                 append("\n")
                 append(formatDate(transaction.timestamp))
@@ -1243,7 +1791,9 @@ class MainActivity : Activity() {
 
     @Deprecated("Deprecated in Java")
     override fun onBackPressed() {
-        if (onPortfolioScreen) {
+        if (onPriceCenterScreen) {
+            showPortfolioScreen()
+        } else if (onPortfolioScreen) {
             showWelcomeScreen()
         } else {
             super.onBackPressed()
