@@ -56,8 +56,9 @@ class MainActivity : Activity() {
     private val prefsName = "investment_android_prefs"
     private val assetsKey = "assets_json"
     private val transactionsKey = "transactions_json"
+    private val toleranceKey = "rebalance_tolerance"
     private val categories = listOf("Cash", "Gold", "Stocks", "Crypto", "Fund", "Other")
-    private val targetTolerancePercent = 1.0
+    private val defaultTolerancePercent = 1.0
     private var onPortfolioScreen = false
 
     private fun dp(value: Int): Int =
@@ -276,6 +277,19 @@ class MainActivity : Activity() {
         return SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.US).format(Date(timestamp))
     }
 
+    private fun loadTolerance(): Double {
+        val raw = getSharedPreferences(prefsName, MODE_PRIVATE)
+            .getString(toleranceKey, null)
+        return raw?.toDoubleOrNull() ?: defaultTolerancePercent
+    }
+
+    private fun saveTolerance(value: Double) {
+        getSharedPreferences(prefsName, MODE_PRIVATE)
+            .edit()
+            .putString(toleranceKey, value.toString())
+            .apply()
+    }
+
     private fun showWelcomeScreen() {
         onPortfolioScreen = false
 
@@ -329,6 +343,7 @@ class MainActivity : Activity() {
         val totalInvested = assets.sumOf { it.invested }
         val totalProfit = totalValue - totalInvested
         val totalTarget = assets.sumOf { it.targetPercent }
+        val tolerance = loadTolerance()
 
         val container = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
@@ -416,7 +431,7 @@ class MainActivity : Activity() {
         } else {
             container.addView(
                 TextView(this).apply {
-                    text = "Rebalance tolerance: ±1.0%"
+                    text = String.format(Locale.US, "Rebalance tolerance: ±%.1f%%", tolerance)
                     textSize = 12f
                     setTextColor(Color.GRAY)
                     setPadding(0, 0, 0, dp(18))
@@ -448,6 +463,7 @@ class MainActivity : Activity() {
                         asset = asset,
                         allocation = allocation,
                         totalPortfolioValue = totalValue,
+                        tolerancePercent = tolerance,
                         index = indexedAsset.index
                     )
                 }
@@ -458,6 +474,20 @@ class MainActivity : Activity() {
             isAllCaps = false
             textSize = 16f
             setOnClickListener { showAssetDialog() }
+        }
+
+        val targetsButton = Button(this).apply {
+            text = "Edit Targets"
+            isAllCaps = false
+            textSize = 16f
+            setOnClickListener { showTargetsDialog() }
+        }
+
+        val toleranceButton = Button(this).apply {
+            text = String.format(Locale.US, "Tolerance: ±%.1f%%", tolerance)
+            isAllCaps = false
+            textSize = 16f
+            setOnClickListener { showToleranceDialog() }
         }
 
         val resetButton = Button(this).apply {
@@ -490,7 +520,10 @@ class MainActivity : Activity() {
             topMargin = dp(10)
         }
 
+        addRebalanceSummary(container, assets, totalValue, totalTarget, tolerance)
         container.addView(addButton, buttonParams)
+        container.addView(targetsButton, buttonParams)
+        container.addView(toleranceButton, buttonParams)
         addRecentActivity(container)
         container.addView(resetButton, buttonParams)
         container.addView(backButton, buttonParams)
@@ -500,6 +533,217 @@ class MainActivity : Activity() {
                 addView(container)
             }
         )
+    }
+
+    private fun showTargetsDialog() {
+        val assets = loadAssets()
+        if (assets.isEmpty()) {
+            Toast.makeText(this, "Add at least one asset first.", Toast.LENGTH_SHORT).show()
+            return
+        }
+
+        val form = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(20), dp(8), dp(20), dp(4))
+        }
+
+        val inputs = mutableListOf<Pair<Int, EditText>>()
+
+        assets.forEachIndexed { index, asset ->
+            form.addView(
+                TextView(this).apply {
+                    text = asset.name
+                    textSize = 15f
+                    setTypeface(typeface, Typeface.BOLD)
+                    setTextColor(Color.DKGRAY)
+                    setPadding(0, dp(8), 0, 0)
+                }
+            )
+
+            val input = EditText(this).apply {
+                hint = "Target %"
+                inputType = InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_FLAG_DECIMAL
+                setText(formatQuantity(asset.targetPercent))
+            }
+            inputs.add(index to input)
+            form.addView(input)
+        }
+
+        val scroll = ScrollView(this).apply {
+            addView(form)
+        }
+
+        val dialog = AlertDialog.Builder(this)
+            .setTitle("Edit Target Allocation")
+            .setMessage("Targets must add up to 100%.")
+            .setView(scroll)
+            .setNegativeButton("Cancel", null)
+            .setPositiveButton("Save", null)
+            .create()
+
+        dialog.setOnShowListener {
+            dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
+                val updatedTargets = mutableMapOf<Int, Double>()
+                var invalid = false
+
+                inputs.forEach { (index, input) ->
+                    val value = input.text.toString().trim().replace(",", "").toDoubleOrNull()
+                    if (value == null || value < 0.0 || value > 100.0) {
+                        input.error = "Enter 0 to 100"
+                        invalid = true
+                    } else {
+                        updatedTargets[index] = value
+                    }
+                }
+
+                if (invalid) {
+                    return@setOnClickListener
+                }
+
+                val total = updatedTargets.values.sum()
+                if (kotlin.math.abs(total - 100.0) > 0.01) {
+                    Toast.makeText(
+                        this,
+                        String.format(Locale.US, "Target total is %.1f%%. It must be 100%%.", total),
+                        Toast.LENGTH_LONG
+                    ).show()
+                    return@setOnClickListener
+                }
+
+                val updatedAssets = loadAssets()
+                updatedTargets.forEach { (index, target) ->
+                    if (index in updatedAssets.indices) {
+                        updatedAssets[index] = updatedAssets[index].copy(targetPercent = target)
+                    }
+                }
+
+                saveAssets(updatedAssets)
+                dialog.dismiss()
+                showPortfolioScreen()
+            }
+        }
+
+        dialog.show()
+    }
+
+    private fun showToleranceDialog() {
+        val input = EditText(this).apply {
+            hint = "Tolerance (%)"
+            inputType = InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_FLAG_DECIMAL
+            setText(formatQuantity(loadTolerance()))
+            setPadding(dp(20), dp(8), dp(20), 0)
+        }
+
+        val dialog = AlertDialog.Builder(this)
+            .setTitle("Rebalance Tolerance")
+            .setMessage("Assets within this distance from target are treated as on target.")
+            .setView(input)
+            .setNegativeButton("Cancel", null)
+            .setPositiveButton("Save", null)
+            .create()
+
+        dialog.setOnShowListener {
+            dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
+                val value = input.text.toString().trim().replace(",", "").toDoubleOrNull()
+
+                if (value == null || value < 0.0 || value > 20.0) {
+                    input.error = "Enter a value from 0 to 20"
+                    return@setOnClickListener
+                }
+
+                saveTolerance(value)
+                dialog.dismiss()
+                showPortfolioScreen()
+            }
+        }
+
+        dialog.show()
+    }
+
+    private fun addRebalanceSummary(
+        parent: LinearLayout,
+        assets: List<Asset>,
+        totalPortfolioValue: Double,
+        totalTarget: Double,
+        tolerancePercent: Double
+    ) {
+        parent.addView(
+            TextView(this).apply {
+                text = "Rebalance Summary"
+                textSize = 21f
+                setTypeface(typeface, Typeface.BOLD)
+                setTextColor(Color.rgb(35, 35, 35))
+                setPadding(0, dp(22), 0, dp(8))
+            }
+        )
+
+        if (kotlin.math.abs(totalTarget - 100.0) > 0.01) {
+            parent.addView(
+                TextView(this).apply {
+                    text = "Set targets to a total of 100% to activate rebalance guidance."
+                    textSize = 14f
+                    setTextColor(Color.GRAY)
+                    setPadding(0, 0, 0, dp(10))
+                }
+            )
+            return
+        }
+
+        val actions = assets.mapNotNull { asset ->
+            val currentAllocation = if (totalPortfolioValue > 0.0) {
+                asset.value / totalPortfolioValue * 100.0
+            } else {
+                0.0
+            }
+            val gap = currentAllocation - asset.targetPercent
+
+            if (kotlin.math.abs(gap) <= tolerancePercent) {
+                null
+            } else {
+                val desiredValue = totalPortfolioValue * asset.targetPercent / 100.0
+                val amount = desiredValue - asset.value
+                Triple(asset.name, amount, kotlin.math.abs(amount))
+            }
+        }.sortedByDescending { it.third }
+
+        if (actions.isEmpty()) {
+            parent.addView(
+                TextView(this).apply {
+                    text = "Portfolio is within tolerance. No rebalance action is needed."
+                    textSize = 14f
+                    setTextColor(Color.rgb(25, 125, 70))
+                    setPadding(0, 0, 0, dp(10))
+                }
+            )
+            return
+        }
+
+        actions.forEach { (name, amount, _) ->
+            parent.addView(
+                TextView(this).apply {
+                    text = if (amount > 0.0) {
+                        "Buy " + name + " • " + formatToman(amount)
+                    } else {
+                        "Sell " + name + " • " + formatToman(kotlin.math.abs(amount))
+                    }
+                    textSize = 14f
+                    setTypeface(typeface, Typeface.BOLD)
+                    setTextColor(Color.DKGRAY)
+                    setPadding(dp(12), dp(9), dp(12), dp(9))
+                    background = GradientDrawable().apply {
+                        setColor(Color.WHITE)
+                        cornerRadius = dp(10).toFloat()
+                        setStroke(dp(1), Color.rgb(230, 230, 230))
+                    }
+                },
+                LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.WRAP_CONTENT
+                ).apply {
+                    bottomMargin = dp(6)
+                }
+            )
+        }
     }
 
     private fun showAssetDialog(index: Int? = null, existing: Asset? = null) {
@@ -618,6 +862,7 @@ class MainActivity : Activity() {
         asset: Asset,
         allocation: Double,
         totalPortfolioValue: Double,
+        tolerancePercent: Double,
         index: Int
     ) {
         val card = LinearLayout(this).apply {
@@ -718,7 +963,7 @@ class MainActivity : Activity() {
                 text = String.format(Locale.US, "Distance to target: %+.1f%%", gap)
                 textSize = 13f
                 setTextColor(
-                    if (kotlin.math.abs(gap) <= targetTolerancePercent) {
+                    if (kotlin.math.abs(gap) <= tolerancePercent) {
                         Color.rgb(25, 125, 70)
                     } else {
                         Color.rgb(185, 110, 25)
@@ -734,14 +979,14 @@ class MainActivity : Activity() {
             TextView(this).apply {
                 text = when {
                     asset.targetPercent <= 0.0 -> "Rebalance: No target set"
-                    kotlin.math.abs(gap) <= targetTolerancePercent -> "Rebalance: On target"
+                    kotlin.math.abs(gap) <= tolerancePercent -> "Rebalance: On target"
                     rebalanceAmount > 0.0 -> "Rebalance: Buy about " + formatToman(rebalanceAmount)
                     else -> "Rebalance: Sell about " + formatToman(kotlin.math.abs(rebalanceAmount))
                 }
                 textSize = 13f
                 setTypeface(typeface, Typeface.BOLD)
                 setTextColor(
-                    if (kotlin.math.abs(gap) <= targetTolerancePercent && asset.targetPercent > 0.0) {
+                    if (kotlin.math.abs(gap) <= tolerancePercent && asset.targetPercent > 0.0) {
                         Color.rgb(25, 125, 70)
                     } else {
                         Color.DKGRAY
