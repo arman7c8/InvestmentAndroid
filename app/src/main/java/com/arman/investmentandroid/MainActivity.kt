@@ -4055,15 +4055,31 @@ class MainActivity : Activity() {
                 ?.bufferedReader()
                 ?.use { it.readText() }
 
-            val existingRoot = try {
-                if (existingRaw.isNullOrBlank()) null else JSONObject(existingRaw)
-            } catch (_: Exception) {
+            // Never interpret malformed or incompatible cloud data as an empty
+            // file: doing so could overwrite a valid desktop/phone backup.
+            val existingRoot = if (existingRaw.isNullOrBlank()) {
                 null
+            } else {
+                try {
+                    JSONObject(existingRaw)
+                } catch (_: Exception) {
+                    throw IllegalArgumentException(
+                        "Cloud file is not valid JSON. No data was overwritten."
+                    )
+                }
+            }
+            if (existingRoot != null && (
+                    existingRoot.optString("format") != "investment.shared.portfolio" ||
+                        existingRoot.optJSONObject("sharedPortfolio") == null ||
+                        existingRoot.optInt("schemaVersion", -1) != 1
+                    )
+            ) {
+                throw IllegalArgumentException(
+                    "Cloud backup format is missing or unsupported. No data was overwritten."
+                )
             }
 
-            val remoteShared = existingRoot
-                ?.takeIf { it.optString("format") == "investment.shared.portfolio" }
-                ?.optJSONObject("sharedPortfolio")
+            val remoteShared = existingRoot?.optJSONObject("sharedPortfolio")
 
             val localShared = buildSharedPortfolio()
             val prefs = getSharedPreferences(prefsName, MODE_PRIVATE)
