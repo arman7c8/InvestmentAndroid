@@ -43,7 +43,14 @@ class MainActivity : Activity() {
         val targetPercent: Double,
         val includeInTarget: Boolean,
         val priceSource: String,
-        val symbol: String
+        val symbol: String,
+        val sharedId: String = "",
+        val sourcePlatform: String = "android",
+        val sourceKind: String = "",
+        val sourceGroupId: String = "",
+        val sourceAssetId: String = "",
+        val sourceBankId: String = "",
+        val sourceGroupKind: String = ""
     ) {
         val value: Double
             get() = quantity * price
@@ -391,7 +398,14 @@ class MainActivity : Activity() {
                                 targetPercent = targetPercent,
                                 includeInTarget = includeInTarget,
                                 priceSource = priceSource,
-                                symbol = symbol
+                                symbol = symbol,
+                                sharedId = item.optString("sharedId", ""),
+                                sourcePlatform = item.optString("sourcePlatform", "android"),
+                                sourceKind = item.optString("sourceKind", ""),
+                                sourceGroupId = item.optString("sourceGroupId", ""),
+                                sourceAssetId = item.optString("sourceAssetId", ""),
+                                sourceBankId = item.optString("sourceBankId", ""),
+                                sourceGroupKind = item.optString("sourceGroupKind", "")
                             )
                         )
                     }
@@ -442,6 +456,13 @@ class MainActivity : Activity() {
                     put("includeInTarget", asset.includeInTarget)
                     put("priceSource", asset.priceSource)
                     put("symbol", asset.symbol)
+                    put("sharedId", asset.sharedId)
+                    put("sourcePlatform", asset.sourcePlatform)
+                    put("sourceKind", asset.sourceKind)
+                    put("sourceGroupId", asset.sourceGroupId)
+                    put("sourceAssetId", asset.sourceAssetId)
+                    put("sourceBankId", asset.sourceBankId)
+                    put("sourceGroupKind", asset.sourceGroupKind)
                 }
             )
         }
@@ -463,6 +484,13 @@ class MainActivity : Activity() {
             put("includeInTarget", asset.includeInTarget)
             put("priceSource", asset.priceSource)
             put("symbol", asset.symbol)
+            put("sharedId", asset.sharedId)
+            put("sourcePlatform", asset.sourcePlatform)
+            put("sourceKind", asset.sourceKind)
+            put("sourceGroupId", asset.sourceGroupId)
+            put("sourceAssetId", asset.sourceAssetId)
+            put("sourceBankId", asset.sourceBankId)
+            put("sourceGroupKind", asset.sourceGroupKind)
         }.toString()
     }
 
@@ -482,7 +510,14 @@ class MainActivity : Activity() {
                 targetPercent = item.optDouble("targetPercent", 0.0),
                 includeInTarget = item.optBoolean("includeInTarget", true),
                 priceSource = item.optString("priceSource", "Manual"),
-                symbol = item.optString("symbol", "")
+                symbol = item.optString("symbol", ""),
+                sharedId = item.optString("sharedId", ""),
+                sourcePlatform = item.optString("sourcePlatform", "android"),
+                sourceKind = item.optString("sourceKind", ""),
+                sourceGroupId = item.optString("sourceGroupId", ""),
+                sourceAssetId = item.optString("sourceAssetId", ""),
+                sourceBankId = item.optString("sourceBankId", ""),
+                sourceGroupKind = item.optString("sourceGroupKind", "")
             )
         } catch (_: Exception) {
             null
@@ -1070,7 +1105,7 @@ class MainActivity : Activity() {
         }
 
         val subtitle = TextView(this).apply {
-            text = "Your portfolio, one step closer to mobile.\nv0.23.0"
+            text = "Your portfolio, one step closer to mobile.\nv0.24.0"
             textSize = 17f
             gravity = Gravity.CENTER
             setTextColor(Color.DKGRAY)
@@ -1351,7 +1386,7 @@ class MainActivity : Activity() {
         container.addView(backButton, buttonParams)
         container.addView(
             TextView(this).apply {
-                text = "Investment Android • v0.23.0"
+                text = "Investment Android • v0.24.0"
                 textSize = 12f
                 gravity = Gravity.CENTER
                 setTextColor(Color.GRAY)
@@ -4115,6 +4150,9 @@ class MainActivity : Activity() {
     }
 
     private fun sharedAssetId(asset: Asset): String {
+        if (asset.sharedId.isNotBlank()) {
+            return asset.sharedId
+        }
         val identity = if (asset.symbol.isNotBlank()) {
             asset.symbol.uppercase(Locale.US)
         } else {
@@ -4147,7 +4185,28 @@ class MainActivity : Activity() {
                     put("price_source", asset.priceSource)
                     put("symbol", asset.symbol)
                     put("unrealized_pnl_percent", profitPercent)
-                    put("source_platform", "android")
+                    put(
+                        "source_platform",
+                        asset.sourcePlatform.ifBlank { "android" }
+                    )
+                    if (
+                        asset.sourceKind.isNotBlank() ||
+                        asset.sourceGroupId.isNotBlank() ||
+                        asset.sourceAssetId.isNotBlank() ||
+                        asset.sourceBankId.isNotBlank() ||
+                        asset.sourceGroupKind.isNotBlank()
+                    ) {
+                        put(
+                            "source",
+                            JSONObject().apply {
+                                if (asset.sourceKind.isNotBlank()) put("kind", asset.sourceKind)
+                                if (asset.sourceGroupId.isNotBlank()) put("group_id", asset.sourceGroupId)
+                                if (asset.sourceAssetId.isNotBlank()) put("asset_id", asset.sourceAssetId)
+                                if (asset.sourceBankId.isNotBlank()) put("bank_id", asset.sourceBankId)
+                                if (asset.sourceGroupKind.isNotBlank()) put("group_kind", asset.sourceGroupKind)
+                            }
+                        )
+                    }
                 }
             )
         }
@@ -4221,6 +4280,7 @@ class MainActivity : Activity() {
             val source = item.optString("price_source", "Manual").let {
                 if (priceSources.contains(it)) it else "Manual"
             }
+            val sourceMeta = item.optJSONObject("source")
 
             if (categories.none { it.equals(category, ignoreCase = true) }) {
                 categories.add(category)
@@ -4236,7 +4296,14 @@ class MainActivity : Activity() {
                     targetPercent = target,
                     includeInTarget = included,
                     priceSource = source,
-                    symbol = symbol
+                    symbol = symbol,
+                    sharedId = item.optString("id", ""),
+                    sourcePlatform = item.optString("source_platform", "android"),
+                    sourceKind = sourceMeta?.optString("kind", "") ?: "",
+                    sourceGroupId = sourceMeta?.optString("group_id", "") ?: "",
+                    sourceAssetId = sourceMeta?.optString("asset_id", "") ?: "",
+                    sourceBankId = sourceMeta?.optString("bank_id", "") ?: "",
+                    sourceGroupKind = sourceMeta?.optString("group_kind", "") ?: ""
                 )
             )
         }
