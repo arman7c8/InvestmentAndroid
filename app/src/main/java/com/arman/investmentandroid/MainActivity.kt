@@ -89,6 +89,8 @@ class MainActivity : Activity() {
     private val cloudBackupUriKey = "cloud_backup_uri"
     private val cloudLastSyncKey = "cloud_last_sync"
     private val cloudSharedFingerprintKey = "cloud_shared_fingerprint"
+    private val cloudAutoSyncKey = "cloud_auto_sync"
+    private val cloudLastAutoCheckKey = "cloud_last_auto_check"
     private val exportBackupRequestCode = 1001
     private val importBackupRequestCode = 1002
     private val createCloudBackupRequestCode = 1003
@@ -123,6 +125,11 @@ class MainActivity : Activity() {
     override fun onResume() {
         super.onResume()
         scheduleAutoRefresh()
+        autoRefreshHandler.postDelayed({
+            if (onPortfolioScreen) {
+                smartCloudSyncOnResume()
+            }
+        }, 700L)
     }
 
     override fun onPause() {
@@ -1061,7 +1068,7 @@ class MainActivity : Activity() {
         }
 
         val subtitle = TextView(this).apply {
-            text = "Your portfolio, one step closer to mobile.\nv0.20.0"
+            text = "Your portfolio, one step closer to mobile.\nv0.21.0"
             textSize = 17f
             gravity = Gravity.CENTER
             setTextColor(Color.DKGRAY)
@@ -1342,7 +1349,7 @@ class MainActivity : Activity() {
         container.addView(backButton, buttonParams)
         container.addView(
             TextView(this).apply {
-                text = "Investment Android • v0.20.0"
+                text = "Investment Android • v0.21.0"
                 textSize = 12f
                 gravity = Gravity.CENTER
                 setTextColor(Color.GRAY)
@@ -1416,6 +1423,7 @@ class MainActivity : Activity() {
             TextView(this).apply {
                 text = buildString {
                     append(localCloudSyncState())
+                    append(if (isCloudAutoSyncEnabled()) " • Smart sync on" else " • Smart sync off")
                     if (lastSync > 0L) {
                         append(" • ")
                         append(formatDate(lastSync))
@@ -3472,6 +3480,17 @@ class MainActivity : Activity() {
             .apply()
     }
 
+    private fun isCloudAutoSyncEnabled(): Boolean =
+        getSharedPreferences(prefsName, MODE_PRIVATE)
+            .getBoolean(cloudAutoSyncKey, true)
+
+    private fun setCloudAutoSyncEnabled(enabled: Boolean) {
+        getSharedPreferences(prefsName, MODE_PRIVATE)
+            .edit()
+            .putBoolean(cloudAutoSyncKey, enabled)
+            .apply()
+    }
+
     private fun cloudStatusText(): String {
         val prefs = getSharedPreferences(prefsName, MODE_PRIVATE)
         val connected = loadCloudBackupUri() != null
@@ -3479,6 +3498,8 @@ class MainActivity : Activity() {
 
         return buildString {
             append(if (connected) "Cloud backup file connected." else "No cloud backup file connected.")
+            append("\nSmart sync on resume: ")
+            append(if (isCloudAutoSyncEnabled()) "On" else "Off")
             if (lastSync > 0L) {
                 append("\nLast sync: ")
                 append(formatDate(lastSync))
@@ -3494,6 +3515,7 @@ class MainActivity : Activity() {
                 "Check Cloud Status",
                 "Sync Now",
                 "Load from Cloud",
+                if (isCloudAutoSyncEnabled()) "Turn Smart Sync Off" else "Turn Smart Sync On",
                 "Choose Different Cloud File",
                 "Disconnect Cloud File"
             )
@@ -3513,13 +3535,23 @@ class MainActivity : Activity() {
                         0 -> checkCloudStatus()
                         1 -> syncToCloud()
                         2 -> confirmLoadFromCloud()
-                        3 -> connectExistingCloudBackup()
-                        4 -> {
+                        3 -> {
+                            val enabled = !isCloudAutoSyncEnabled()
+                            setCloudAutoSyncEnabled(enabled)
+                            Toast.makeText(
+                                this,
+                                if (enabled) "Smart sync enabled." else "Smart sync disabled.",
+                                Toast.LENGTH_SHORT
+                            ).show()
+                        }
+                        4 -> connectExistingCloudBackup()
+                        5 -> {
                             getSharedPreferences(prefsName, MODE_PRIVATE)
                                 .edit()
                                 .remove(cloudBackupUriKey)
                                 .remove(cloudLastSyncKey)
                                 .remove(cloudSharedFingerprintKey)
+                                .remove(cloudLastAutoCheckKey)
                                 .apply()
                             Toast.makeText(this, "Cloud backup disconnected.", Toast.LENGTH_SHORT).show()
                         }
@@ -3706,6 +3738,68 @@ class MainActivity : Activity() {
             categories.size,
             includedTargets
         )
+    }
+
+    private fun smartCloudSyncOnResume() {
+        if (!isCloudAutoSyncEnabled()) {
+            return
+        }
+
+        val uri = loadCloudBackupUri() ?: return
+        val prefs = getSharedPreferences(prefsName, MODE_PRIVATE)
+        val now = System.currentTimeMillis()
+        val lastCheck = prefs.getLong(cloudLastAutoCheckKey, 0L)
+        if (now - lastCheck < 60_000L) {
+            return
+        }
+        prefs.edit().putLong(cloudLastAutoCheckKey, now).apply()
+
+        try {
+            val raw = contentResolver.openInputStream(uri)
+                ?.bufferedReader()
+                ?.use { it.readText() }
+                ?: return
+            val root = JSONObject(raw)
+            if (root.optString("format") != "investment.shared.portfolio") {
+                return
+            }
+            val remote = root.optJSONObject("sharedPortfolio") ?: return
+            val local = buildSharedPortfolio()
+            val baseline = prefs.getString(cloudSharedFingerprintKey, null) ?: return
+            val localFingerprint = sharedFingerprint(local)
+            val remoteFingerprint = sharedFingerprint(remote)
+
+            when {
+                localFingerprint == remoteFingerprint -> Unit
+                localFingerprint == baseline && remoteFingerprint != baseline -> {
+                    restoreBackupJson(raw)
+                    saveCloudBaseline(remote)
+                    markCloudSync()
+                    Toast.makeText(this, "Cloud changes loaded.", Toast.LENGTH_SHORT).show()
+                    showPortfolioScreen()
+                }
+                localFingerprint != baseline && remoteFingerprint == baseline -> {
+                    syncToCloud()
+                }
+                else -> {
+                    val changedRows = sharedChangeCount(local, remote)
+                    AlertDialog.Builder(this)
+                        .setTitle("Cloud Sync Conflict")
+                        .setMessage(
+                            "Smart sync found changes on both Phone and Cloud. " +
+                                changedRows + " asset row(s) differ. Nothing was overwritten."
+                        )
+                        .setNegativeButton("Later", null)
+                        .setNeutralButton("Use Cloud") { _, _ -> loadFromCloud() }
+                        .setPositiveButton("Use Phone") { _, _ ->
+                            syncToCloud(forcePhoneData = true)
+                        }
+                        .show()
+                }
+            }
+        } catch (_: Exception) {
+            // Resume sync is best-effort. Manual Cloud Status shows actionable errors.
+        }
     }
 
     private fun checkCloudStatus() {
