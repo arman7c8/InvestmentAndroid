@@ -27,6 +27,7 @@ import java.net.HttpURLConnection
 import java.net.URL
 import java.text.NumberFormat
 import java.text.SimpleDateFormat
+import java.security.MessageDigest
 import java.util.Date
 import java.util.Locale
 import java.util.UUID
@@ -84,6 +85,7 @@ class MainActivity : Activity() {
     private val categoriesKey = "categories_json"
     private val undoStackKey = "undo_stack_json"
     private val redoStackKey = "redo_stack_json"
+    private val appLockHashKey = "app_lock_hash"
     private val exportBackupRequestCode = 1001
     private val importBackupRequestCode = 1002
     private val coreCategories = listOf("Cash", "Gold", "Stocks", "Crypto", "Fund", "Other")
@@ -104,7 +106,13 @@ class MainActivity : Activity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         ensureSeedData()
-        showWelcomeScreen()
+
+        if (isAppLockEnabled()) {
+            showLockedScreen()
+            showStartupUnlockDialog()
+        } else {
+            showWelcomeScreen()
+        }
     }
 
     override fun onResume() {
@@ -759,6 +767,273 @@ class MainActivity : Activity() {
         return System.currentTimeMillis() - duration
     }
 
+    private fun hashPin(pin: String): String {
+        val digest = MessageDigest.getInstance("SHA-256")
+            .digest(pin.toByteArray(Charsets.UTF_8))
+        return digest.joinToString("") { byte -> "%02x".format(byte) }
+    }
+
+    private fun isAppLockEnabled(): Boolean {
+        return !getSharedPreferences(prefsName, MODE_PRIVATE)
+            .getString(appLockHashKey, null)
+            .isNullOrBlank()
+    }
+
+    private fun verifyPin(pin: String): Boolean {
+        val stored = getSharedPreferences(prefsName, MODE_PRIVATE)
+            .getString(appLockHashKey, null)
+            ?: return false
+        return hashPin(pin) == stored
+    }
+
+    private fun savePin(pin: String) {
+        getSharedPreferences(prefsName, MODE_PRIVATE)
+            .edit()
+            .putString(appLockHashKey, hashPin(pin))
+            .apply()
+    }
+
+    private fun removePin() {
+        getSharedPreferences(prefsName, MODE_PRIVATE)
+            .edit()
+            .remove(appLockHashKey)
+            .apply()
+    }
+
+    private fun showLockedScreen() {
+        onPortfolioScreen = false
+        onPriceCenterScreen = false
+
+        val root = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            gravity = Gravity.CENTER
+            setPadding(dp(24), dp(24), dp(24), dp(24))
+            setBackgroundColor(Color.rgb(248, 249, 250))
+        }
+
+        root.addView(
+            TextView(this).apply {
+                text = "Investment Android"
+                textSize = 28f
+                setTypeface(typeface, Typeface.BOLD)
+                gravity = Gravity.CENTER
+                setTextColor(Color.rgb(35, 35, 35))
+            }
+        )
+
+        root.addView(
+            TextView(this).apply {
+                text = "App Locked"
+                textSize = 16f
+                gravity = Gravity.CENTER
+                setTextColor(Color.GRAY)
+                setPadding(0, dp(12), 0, 0)
+            }
+        )
+
+        setContentView(root)
+    }
+
+    private fun pinInput(): EditText {
+        return EditText(this).apply {
+            hint = "4–8 digit PIN"
+            inputType = InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_VARIATION_PASSWORD
+            setPadding(dp(20), dp(8), dp(20), 0)
+        }
+    }
+
+    private fun showStartupUnlockDialog() {
+        val input = pinInput()
+        val dialog = AlertDialog.Builder(this)
+            .setTitle("Unlock Investment")
+            .setMessage("Enter your app PIN.")
+            .setView(input)
+            .setPositiveButton("Unlock", null)
+            .create()
+
+        dialog.setCancelable(false)
+        dialog.setCanceledOnTouchOutside(false)
+
+        dialog.setOnShowListener {
+            dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
+                val pin = input.text.toString()
+                if (verifyPin(pin)) {
+                    dialog.dismiss()
+                    showWelcomeScreen()
+                } else {
+                    input.error = "Incorrect PIN"
+                    input.selectAll()
+                }
+            }
+        }
+
+        dialog.show()
+    }
+
+    private fun showSetPinDialog(afterSave: (() -> Unit)? = null) {
+        val form = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(20), dp(8), dp(20), 0)
+        }
+
+        val pin = pinInput()
+        val confirm = pinInput().apply {
+            hint = "Confirm PIN"
+        }
+        form.addView(pin)
+        form.addView(confirm)
+
+        val dialog = AlertDialog.Builder(this)
+            .setTitle(if (isAppLockEnabled()) "Change App PIN" else "Enable App Lock")
+            .setMessage("Use a 4–8 digit PIN. The PIN itself is not stored.")
+            .setView(form)
+            .setNegativeButton("Cancel", null)
+            .setPositiveButton("Save", null)
+            .create()
+
+        dialog.setOnShowListener {
+            dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
+                val value = pin.text.toString()
+                val confirmation = confirm.text.toString()
+
+                when {
+                    value.length !in 4..8 || value.any { !it.isDigit() } ->
+                        pin.error = "PIN must contain 4–8 digits"
+                    value != confirmation ->
+                        confirm.error = "PINs do not match"
+                    else -> {
+                        savePin(value)
+                        dialog.dismiss()
+                        Toast.makeText(this, "App lock enabled.", Toast.LENGTH_SHORT).show()
+                        afterSave?.invoke()
+                    }
+                }
+            }
+        }
+
+        dialog.show()
+    }
+
+    private fun verifyCurrentPinThen(action: () -> Unit) {
+        val input = pinInput()
+        val dialog = AlertDialog.Builder(this)
+            .setTitle("Verify Current PIN")
+            .setView(input)
+            .setNegativeButton("Cancel", null)
+            .setPositiveButton("Continue", null)
+            .create()
+
+        dialog.setOnShowListener {
+            dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
+                if (verifyPin(input.text.toString())) {
+                    dialog.dismiss()
+                    action()
+                } else {
+                    input.error = "Incorrect PIN"
+                    input.selectAll()
+                }
+            }
+        }
+
+        dialog.show()
+    }
+
+    private fun showAppLockDialog() {
+        if (!isAppLockEnabled()) {
+            showSetPinDialog()
+            return
+        }
+
+        AlertDialog.Builder(this)
+            .setTitle("App Lock")
+            .setMessage("App lock is enabled.")
+            .setItems(arrayOf("Change PIN", "Remove App Lock")) { _, which ->
+                when (which) {
+                    0 -> verifyCurrentPinThen { showSetPinDialog() }
+                    1 -> verifyCurrentPinThen {
+                        removePin()
+                        Toast.makeText(this, "App lock removed.", Toast.LENGTH_SHORT).show()
+                    }
+                }
+            }
+            .setNegativeButton("Close", null)
+            .show()
+    }
+
+    private fun buildPrivacySafeAiSummary(): String {
+        val assets = loadAssets()
+        val totalValue = assets.sumOf { it.value }
+        val targetAssets = assets.filter { it.includeInTarget }
+        val targetValue = targetAssets.sumOf { it.value }
+
+        return buildString {
+            append("Investment portfolio summary for AI analysis\n")
+            append("Privacy mode: no balances, quantities, purchase amounts, or personal identifiers included.\n")
+            append("Please analyze allocation risk and suggest target-allocation changes if justified by current market conditions.\n\n")
+
+            assets.sortedByDescending { it.value }.forEach { asset ->
+                val portfolioPercent = if (totalValue > 0.0) {
+                    asset.value / totalValue * 100.0
+                } else {
+                    0.0
+                }
+
+                val targetPoolPercent = if (asset.includeInTarget && targetValue > 0.0) {
+                    asset.value / targetValue * 100.0
+                } else {
+                    0.0
+                }
+
+                val profitPercent = if (asset.category != "Cash" && asset.averageCost > 0.0) {
+                    (asset.price / asset.averageCost - 1.0) * 100.0
+                } else {
+                    0.0
+                }
+
+                append("- ")
+                append(asset.name)
+                append(" | ")
+                append(asset.category)
+                append(" | portfolio ")
+                append(String.format(Locale.US, "%.1f%%", portfolioPercent))
+
+                if (asset.includeInTarget) {
+                    append(" | target-pool ")
+                    append(String.format(Locale.US, "%.1f%%", targetPoolPercent))
+                    append(" | target ")
+                    append(String.format(Locale.US, "%.1f%%", asset.targetPercent))
+                } else {
+                    append(" | target excluded")
+                }
+
+                if (asset.category != "Cash") {
+                    append(" | unrealized P/L ")
+                    append(String.format(Locale.US, "%+.1f%%", profitPercent))
+                }
+
+                if (asset.symbol.isNotBlank()) {
+                    append(" | symbol ")
+                    append(asset.symbol)
+                }
+
+                append("\n")
+            }
+
+            append("\nRebalance tolerance: ")
+            append(String.format(Locale.US, "±%.1f%%", loadTolerance()))
+        }
+    }
+
+    private fun sharePrivacySafeAiSummary() {
+        val intent = Intent(Intent.ACTION_SEND).apply {
+            type = "text/plain"
+            putExtra(Intent.EXTRA_SUBJECT, "Investment Portfolio AI Summary")
+            putExtra(Intent.EXTRA_TEXT, buildPrivacySafeAiSummary())
+        }
+
+        startActivity(Intent.createChooser(intent, "Share AI Portfolio Summary"))
+    }
+
     private fun showWelcomeScreen() {
         onPortfolioScreen = false
         onPriceCenterScreen = false
@@ -779,7 +1054,7 @@ class MainActivity : Activity() {
         }
 
         val subtitle = TextView(this).apply {
-            text = "Your portfolio, one step closer to mobile."
+            text = "Your portfolio, one step closer to mobile.\nv0.14.0"
             textSize = 17f
             gravity = Gravity.CENTER
             setTextColor(Color.DKGRAY)
@@ -1343,10 +1618,12 @@ class MainActivity : Activity() {
 
     private fun showToolsDialog() {
         val options = arrayOf(
+            "AI Portfolio Summary",
             "Edit Targets",
             "Rebalance Tolerance",
             "Portfolio History",
             "Manage Categories",
+            "App Lock",
             "Settings",
             "Backup / Restore",
             "Reset Demo Data"
@@ -1356,13 +1633,15 @@ class MainActivity : Activity() {
             .setTitle("Portfolio Tools")
             .setItems(options) { _, which ->
                 when (which) {
-                    0 -> showTargetsDialog()
-                    1 -> showToleranceDialog()
-                    2 -> showHistoryDialog()
-                    3 -> showCategoryManagerDialog()
-                    4 -> showSettingsDialog()
-                    5 -> showBackupDialog()
-                    6 -> showResetDemoDialog()
+                    0 -> sharePrivacySafeAiSummary()
+                    1 -> showTargetsDialog()
+                    2 -> showToleranceDialog()
+                    3 -> showHistoryDialog()
+                    4 -> showCategoryManagerDialog()
+                    5 -> showAppLockDialog()
+                    6 -> showSettingsDialog()
+                    7 -> showBackupDialog()
+                    8 -> showResetDemoDialog()
                 }
             }
             .setNegativeButton("Close", null)
