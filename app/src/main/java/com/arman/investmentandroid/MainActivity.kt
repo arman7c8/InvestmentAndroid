@@ -1105,7 +1105,7 @@ class MainActivity : Activity() {
         }
 
         val subtitle = TextView(this).apply {
-            text = "Your portfolio, one step closer to mobile.\nv0.24.0"
+            text = "Your portfolio, one step closer to mobile.\nv0.25.0"
             textSize = 17f
             gravity = Gravity.CENTER
             setTextColor(Color.DKGRAY)
@@ -1386,7 +1386,7 @@ class MainActivity : Activity() {
         container.addView(backButton, buttonParams)
         container.addView(
             TextView(this).apply {
-                text = "Investment Android • v0.24.0"
+                text = "Investment Android • v0.25.0"
                 textSize = 12f
                 gravity = Gravity.CENTER
                 setTextColor(Color.GRAY)
@@ -4260,11 +4260,40 @@ class MainActivity : Activity() {
         }
     }
 
+    private fun sharedImportKey(
+        item: JSONObject,
+        category: String,
+        name: String,
+        symbol: String
+    ): String {
+        val id = item.optString("id", "").trim()
+        if (id.isNotBlank()) {
+            return "id:" + id.lowercase(Locale.US)
+        }
+
+        val source = item.optJSONObject("source")
+        val groupId = source?.optString("group_id", "")?.trim()?.lowercase(Locale.US) ?: ""
+        val assetId = source?.optString("asset_id", "")?.trim()?.lowercase(Locale.US) ?: ""
+        val bankId = source?.optString("bank_id", "")?.trim()?.lowercase(Locale.US) ?: ""
+        if (groupId.isNotBlank() && assetId.isNotBlank()) {
+            return "source-asset:$groupId:$assetId"
+        }
+        if (groupId.isNotBlank() && bankId.isNotBlank()) {
+            return "source-bank:$groupId:$bankId"
+        }
+
+        if (symbol.isNotBlank()) {
+            return "symbol:" + category.lowercase(Locale.US) + ":" + symbol.lowercase(Locale.US)
+        }
+
+        return "name:" + category.lowercase(Locale.US) + ":" + name.lowercase(Locale.US)
+    }
+
     private fun importSharedPortfolio(portfolio: JSONObject) {
         val rawAssets = portfolio.optJSONArray("assets")
             ?: throw IllegalArgumentException("Shared portfolio does not contain assets.")
 
-        val imported = mutableListOf<Asset>()
+        val importedByKey = linkedMapOf<String, Asset>()
         val categories = loadCategories()
 
         for (index in 0 until rawAssets.length()) {
@@ -4286,28 +4315,28 @@ class MainActivity : Activity() {
                 categories.add(category)
             }
 
-            imported.add(
-                Asset(
-                    name = name,
-                    category = category,
-                    quantity = if (category == "Cash") 1.0 else quantity.coerceAtLeast(0.0000001),
-                    price = price,
-                    averageCost = if (category == "Cash") price else averageCost,
-                    targetPercent = target,
-                    includeInTarget = included,
-                    priceSource = source,
-                    symbol = symbol,
-                    sharedId = item.optString("id", ""),
-                    sourcePlatform = item.optString("source_platform", "android"),
-                    sourceKind = sourceMeta?.optString("kind", "") ?: "",
-                    sourceGroupId = sourceMeta?.optString("group_id", "") ?: "",
-                    sourceAssetId = sourceMeta?.optString("asset_id", "") ?: "",
-                    sourceBankId = sourceMeta?.optString("bank_id", "") ?: "",
-                    sourceGroupKind = sourceMeta?.optString("group_kind", "") ?: ""
-                )
+            val importedAsset = Asset(
+                name = name,
+                category = category,
+                quantity = if (category == "Cash") 1.0 else quantity.coerceAtLeast(0.0000001),
+                price = price,
+                averageCost = if (category == "Cash") price else averageCost,
+                targetPercent = target,
+                includeInTarget = included,
+                priceSource = source,
+                symbol = symbol,
+                sharedId = item.optString("id", ""),
+                sourcePlatform = item.optString("source_platform", "android"),
+                sourceKind = sourceMeta?.optString("kind", "") ?: "",
+                sourceGroupId = sourceMeta?.optString("group_id", "") ?: "",
+                sourceAssetId = sourceMeta?.optString("asset_id", "") ?: "",
+                sourceBankId = sourceMeta?.optString("bank_id", "") ?: "",
+                sourceGroupKind = sourceMeta?.optString("group_kind", "") ?: ""
             )
+            importedByKey[sharedImportKey(item, category, name, symbol)] = importedAsset
         }
 
+        val imported = importedByKey.values.toMutableList()
         val sharedTolerance = portfolio.optDouble(
             "rebalance_tolerance_percent",
             loadTolerance()
