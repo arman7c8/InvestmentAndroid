@@ -3914,7 +3914,9 @@ class MainActivity : Activity() {
                 ?.use { it.readText() }
                 ?: return
             val root = JSONObject(raw)
-            if (root.optString("format") != "investment.shared.portfolio") {
+            if (root.optString("format") != "investment.shared.portfolio" ||
+                root.optInt("schemaVersion", -1) != 1
+            ) {
                 return
             }
             val remote = root.optJSONObject("sharedPortfolio") ?: return
@@ -3992,8 +3994,10 @@ class MainActivity : Activity() {
                 ?.use { it.readText() }
                 ?: throw IllegalStateException("Could not read the connected cloud file.")
             val root = JSONObject(raw)
-            if (root.optString("format") != "investment.shared.portfolio") {
-                throw IllegalArgumentException("The connected file is not a shared Investment portfolio.")
+            if (root.optString("format") != "investment.shared.portfolio" ||
+                root.optInt("schemaVersion", -1) != 1
+            ) {
+                throw IllegalArgumentException("The connected file has an unsupported shared portfolio schema.")
             }
             val remote = root.optJSONObject("sharedPortfolio")
                 ?: throw IllegalArgumentException("Shared portfolio data is missing.")
@@ -4499,6 +4503,9 @@ class MainActivity : Activity() {
         val root = JSONObject(raw)
 
         if (root.optString("format") == "investment.shared.portfolio") {
+            require(root.optInt("schemaVersion", -1) == 1) {
+                "Unsupported shared portfolio schema. Local data was not changed."
+            }
             val sharedPortfolio = root.optJSONObject("sharedPortfolio")
                 ?: throw IllegalArgumentException("Shared portfolio payload is missing.")
 
