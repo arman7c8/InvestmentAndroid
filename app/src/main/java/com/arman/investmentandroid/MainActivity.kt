@@ -1058,7 +1058,7 @@ class MainActivity : Activity() {
         }
 
         val subtitle = TextView(this).apply {
-            text = "Your portfolio, one step closer to mobile.\nv0.15.0"
+            text = "Your portfolio, one step closer to mobile.\nv0.16.0"
             textSize = 17f
             gravity = Gravity.CENTER
             setTextColor(Color.DKGRAY)
@@ -3556,11 +3556,56 @@ class MainActivity : Activity() {
         startActivityForResult(intent, importBackupRequestCode)
     }
 
-    private fun createBackupJson(): String {
+    private fun sharedAssetId(asset: Asset): String {
+        val identity = if (asset.symbol.isNotBlank()) {
+            asset.symbol.uppercase(Locale.US)
+        } else {
+            asset.name.trim().lowercase(Locale.US)
+        }
+        return "android:" + asset.category.trim().lowercase(Locale.US) + ":" + identity
+    }
+
+    private fun buildSharedPortfolio(): JSONObject {
+        val assets = loadAssets()
+        val array = JSONArray()
+
+        assets.forEach { asset ->
+            val profitPercent = if (asset.category != "Cash" && asset.averageCost > 0.0) {
+                (asset.price / asset.averageCost - 1.0) * 100.0
+            } else {
+                0.0
+            }
+
+            array.put(
+                JSONObject().apply {
+                    put("id", sharedAssetId(asset))
+                    put("name", asset.name)
+                    put("category", asset.category)
+                    put("quantity", asset.quantity)
+                    put("price_toman", asset.price)
+                    put("average_cost_toman", asset.averageCost)
+                    put("target_percent", asset.targetPercent)
+                    put("include_in_target", asset.includeInTarget)
+                    put("price_source", asset.priceSource)
+                    put("symbol", asset.symbol)
+                    put("unrealized_pnl_percent", profitPercent)
+                    put("source_platform", "android")
+                }
+            )
+        }
+
+        return JSONObject().apply {
+            put("currency", "Toman")
+            put("assets", array)
+            put("rebalance_tolerance_percent", loadTolerance())
+        }
+    }
+
+    private fun buildAndroidBackupPayload(): JSONObject {
         val prefs = getSharedPreferences(prefsName, MODE_PRIVATE)
 
         return JSONObject().apply {
-            put("formatVersion", 3)
+            put("backupVersion", 3)
             put("createdAt", System.currentTimeMillis())
             put("assets", JSONArray(prefs.getString(assetsKey, "[]") ?: "[]"))
             put("transactions", JSONArray(prefs.getString(transactionsKey, "[]") ?: "[]"))
@@ -3570,11 +3615,62 @@ class MainActivity : Activity() {
             put("summaryPeriod", loadSummaryPeriod())
             put("autoRefreshMinutes", loadAutoRefreshMinutes())
             put("categories", JSONArray(prefs.getString(categoriesKey, "[]") ?: "[]"))
-        }.toString(2)
+        }
     }
 
-    private fun restoreBackupJson(raw: String) {
-        val root = JSONObject(raw)
+    private fun importSharedPortfolio(portfolio: JSONObject) {
+        val rawAssets = portfolio.optJSONArray("assets")
+            ?: throw IllegalArgumentException("Shared portfolio does not contain assets.")
+
+        val imported = mutableListOf<Asset>()
+        val categories = loadCategories()
+
+        for (index in 0 until rawAssets.length()) {
+            val item = rawAssets.getJSONObject(index)
+            val name = item.optString("name", "Asset").trim().ifBlank { "Asset" }
+            val category = item.optString("category", "Other").trim().ifBlank { "Other" }
+            val quantity = item.optDouble("quantity", 1.0).coerceAtLeast(0.0)
+            val price = item.optDouble("price_toman", 0.0).coerceAtLeast(0.0)
+            val averageCost = item.optDouble("average_cost_toman", price).coerceAtLeast(0.0)
+            val target = item.optDouble("target_percent", 0.0).coerceIn(0.0, 100.0)
+            val included = item.optBoolean("include_in_target", target > 0.0)
+            val symbol = item.optString("symbol", "").trim().uppercase(Locale.US)
+            val source = item.optString("price_source", "Manual").let {
+                if (priceSources.contains(it)) it else "Manual"
+            }
+
+            if (categories.none { it.equals(category, ignoreCase = true) }) {
+                categories.add(category)
+            }
+
+            imported.add(
+                Asset(
+                    name = name,
+                    category = category,
+                    quantity = if (category == "Cash") 1.0 else quantity.coerceAtLeast(0.0000001),
+                    price = price,
+                    averageCost = if (category == "Cash") price else averageCost,
+                    targetPercent = target,
+                    includeInTarget = included,
+                    priceSource = source,
+                    symbol = symbol
+                )
+            )
+        }
+
+        val sharedTolerance = portfolio.optDouble(
+            "rebalance_tolerance_percent",
+            loadTolerance()
+        ).coerceIn(0.0, 20.0)
+
+        pushUndoCheckpoint()
+        saveAssets(imported)
+        saveCategories(categories)
+        saveTolerance(sharedTolerance)
+        recordSnapshot(imported)
+    }
+
+    private fun restoreAndroidBackupPayload(root: JSONObject) {
         val assets = root.getJSONArray("assets")
         val transactions = root.optJSONArray("transactions") ?: JSONArray()
         val snapshots = root.optJSONArray("snapshots") ?: JSONArray()
@@ -3599,6 +3695,35 @@ class MainActivity : Activity() {
             .apply()
 
         scheduleAutoRefresh()
+    }
+
+    private fun createBackupJson(): String {
+        return JSONObject().apply {
+            put("format", "investment.shared.portfolio")
+            put("schemaVersion", 1)
+            put("updatedAt", System.currentTimeMillis())
+            put("sharedPortfolio", buildSharedPortfolio())
+            put("androidBackup", buildAndroidBackupPayload())
+        }.toString(2)
+    }
+
+    private fun restoreBackupJson(raw: String) {
+        val root = JSONObject(raw)
+
+        if (root.optString("format") == "investment.shared.portfolio") {
+            val androidBackup = root.optJSONObject("androidBackup")
+            if (androidBackup != null) {
+                restoreAndroidBackupPayload(androidBackup)
+            } else {
+                val sharedPortfolio = root.optJSONObject("sharedPortfolio")
+                    ?: throw IllegalArgumentException("Shared portfolio payload is missing.")
+                importSharedPortfolio(sharedPortfolio)
+            }
+            return
+        }
+
+        // Backward compatibility with Android backup v1-v3.
+        restoreAndroidBackupPayload(root)
     }
 
     @Deprecated("Deprecated in Java")
@@ -3645,7 +3770,16 @@ class MainActivity : Activity() {
                     val raw = contentResolver.openInputStream(uri)?.bufferedReader()?.use { it.readText() }
                         ?: throw IllegalArgumentException("Could not read selected backup file.")
 
-                    JSONObject(raw).getJSONArray("assets")
+                    val selected = JSONObject(raw)
+                    val valid = if (selected.optString("format") == "investment.shared.portfolio") {
+                        selected.optJSONObject("sharedPortfolio")
+                            ?.optJSONArray("assets") != null
+                    } else {
+                        selected.optJSONArray("assets") != null
+                    }
+                    if (!valid) {
+                        throw IllegalArgumentException("Selected file is not a compatible Investment backup.")
+                    }
                     saveCloudBackupUri(uri)
 
                     AlertDialog.Builder(this)
