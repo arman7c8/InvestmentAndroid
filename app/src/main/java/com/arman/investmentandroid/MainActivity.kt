@@ -1105,7 +1105,7 @@ class MainActivity : Activity() {
         }
 
         val subtitle = TextView(this).apply {
-            text = "Your portfolio, one step closer to mobile.\nv0.26.0"
+            text = "Your portfolio, one step closer to mobile.\nv0.27.0"
             textSize = 17f
             gravity = Gravity.CENTER
             setTextColor(Color.DKGRAY)
@@ -1386,7 +1386,7 @@ class MainActivity : Activity() {
         container.addView(backButton, buttonParams)
         container.addView(
             TextView(this).apply {
-                text = "Investment Android • v0.26.0"
+                text = "Investment Android • v0.27.0"
                 textSize = 12f
                 gravity = Gravity.CENTER
                 setTextColor(Color.GRAY)
@@ -4272,21 +4272,21 @@ class MainActivity : Activity() {
         val raw = item.optString("category", "Other").trim()
         val folded = raw.lowercase(Locale.US)
         val source = item.optJSONObject("source")
-        val sourceGroup = source?.optString("group_id", "")?.lowercase(Locale.US) ?: ""
-        val sourceKind = source?.optString("group_kind", "")?.lowercase(Locale.US) ?: ""
+        val sourceGroup = source?.optString("group_id", "")?.trim()?.lowercase(Locale.US) ?: ""
+        val sourceKind = source?.optString("group_kind", "")?.trim()?.lowercase(Locale.US) ?: ""
+
+        val cashAliases = setOf("cash", "cash & currencies", "cash and currencies", "currencies", "currency", "bank", "banks")
+        val cryptoAliases = setOf("crypto", "cryptocurrency", "cryptocurrencies")
+        val stockAliases = setOf("stock", "stocks", "share", "shares", "equity", "equities")
+        val goldAliases = setOf("gold", "silver", "precious metal", "precious metals")
+        val fundAliases = setOf("fund", "funds", "etf", "etfs")
 
         return when {
-            sourceGroup == "cash" || "cash" in folded || "currenc" in folded || "bank" in folded ->
-                "Cash"
-            sourceGroup == "crypto" || sourceKind == "crypto" || "crypto" in folded ->
-                "Crypto"
-            sourceGroup == "stocks" || "stock" in folded || "share" in folded || "equity" in folded ->
-                "Stocks"
-            sourceGroup == "gold" || sourceGroup == "silver" ||
-                "gold" in folded || "silver" in folded || "precious" in folded || "metal" in folded ->
-                "Gold"
-            sourceGroup == "fund" || "fund" in folded || "etf" in folded ->
-                "Fund"
+            sourceGroup == "cash" || folded in cashAliases -> "Cash"
+            sourceGroup == "crypto" || sourceKind == "crypto" || folded in cryptoAliases -> "Crypto"
+            sourceGroup == "stocks" || folded in stockAliases -> "Stocks"
+            sourceGroup == "gold" || sourceGroup == "silver" || folded in goldAliases -> "Gold"
+            sourceGroup == "fund" || folded in fundAliases -> "Fund"
             coreCategories.any { it.equals(raw, ignoreCase = true) } ->
                 coreCategories.first { it.equals(raw, ignoreCase = true) }
             else -> raw.ifBlank { "Other" }
