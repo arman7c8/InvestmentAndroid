@@ -1061,7 +1061,7 @@ class MainActivity : Activity() {
         }
 
         val subtitle = TextView(this).apply {
-            text = "Your portfolio, one step closer to mobile.\nv0.19.0"
+            text = "Your portfolio, one step closer to mobile.\nv0.20.0"
             textSize = 17f
             gravity = Gravity.CENTER
             setTextColor(Color.DKGRAY)
@@ -1342,7 +1342,7 @@ class MainActivity : Activity() {
         container.addView(backButton, buttonParams)
         container.addView(
             TextView(this).apply {
-                text = "Investment Android • v0.19.0"
+                text = "Investment Android • v0.20.0"
                 textSize = 12f
                 gravity = Gravity.CENTER
                 setTextColor(Color.GRAY)
@@ -1370,7 +1370,7 @@ class MainActivity : Activity() {
         return try {
             val current = sharedFingerprint(buildSharedPortfolio())
             if (current == baseline) {
-                "Synced"
+                "Last known synced"
             } else {
                 "Local changes pending sync"
             }
@@ -1424,7 +1424,7 @@ class MainActivity : Activity() {
                 textSize = 12f
                 setTextColor(
                     when (localCloudSyncState()) {
-                        "Synced" -> Color.rgb(25, 125, 70)
+                        "Last known synced" -> Color.rgb(25, 125, 70)
                         "Local changes pending sync" -> Color.rgb(185, 110, 25)
                         else -> Color.GRAY
                     }
@@ -3491,7 +3491,8 @@ class MainActivity : Activity() {
         val connected = loadCloudBackupUri() != null
         val options = if (connected) {
             arrayOf(
-                "Sync Now (upload this phone)",
+                "Check Cloud Status",
+                "Sync Now",
                 "Load from Cloud",
                 "Choose Different Cloud File",
                 "Disconnect Cloud File"
@@ -3509,10 +3510,11 @@ class MainActivity : Activity() {
             .setItems(options) { _, which ->
                 if (connected) {
                     when (which) {
-                        0 -> syncToCloud()
-                        1 -> confirmLoadFromCloud()
-                        2 -> connectExistingCloudBackup()
-                        3 -> {
+                        0 -> checkCloudStatus()
+                        1 -> syncToCloud()
+                        2 -> confirmLoadFromCloud()
+                        3 -> connectExistingCloudBackup()
+                        4 -> {
                             getSharedPreferences(prefsName, MODE_PRIVATE)
                                 .edit()
                                 .remove(cloudBackupUriKey)
@@ -3645,6 +3647,130 @@ class MainActivity : Activity() {
         return root
     }
 
+    private fun sharedAssetKey(item: JSONObject): String {
+        val id = item.optString("id", "").trim()
+        if (id.isNotBlank()) {
+            return id
+        }
+        val symbol = item.optString("symbol", "").trim().uppercase(Locale.US)
+        val name = item.optString("name", "").trim().lowercase(Locale.US)
+        val category = item.optString("category", "").trim().lowercase(Locale.US)
+        return category + ":" + (if (symbol.isNotBlank()) symbol else name)
+    }
+
+    private fun sharedChangeCount(left: JSONObject, right: JSONObject): Int {
+        fun mapOfAssets(portfolio: JSONObject): Map<String, String> {
+            val result = mutableMapOf<String, String>()
+            val assets = portfolio.optJSONArray("assets") ?: JSONArray()
+            for (index in 0 until assets.length()) {
+                val item = assets.optJSONObject(index) ?: continue
+                val normalized = listOf(
+                    item.optString("name", ""),
+                    item.optString("category", ""),
+                    item.optDouble("quantity", 0.0).toString(),
+                    item.optDouble("price_toman", 0.0).toString(),
+                    item.optDouble("average_cost_toman", 0.0).toString(),
+                    item.optDouble("target_percent", 0.0).toString(),
+                    item.optBoolean("include_in_target", false).toString(),
+                    item.optString("price_source", ""),
+                    item.optString("symbol", "")
+                ).joinToString("|")
+                result[sharedAssetKey(item)] = normalized
+            }
+            return result
+        }
+
+        val a = mapOfAssets(left)
+        val b = mapOfAssets(right)
+        return (a.keys + b.keys).count { key -> a[key] != b[key] }
+    }
+
+    private fun sharedPortfolioSummary(portfolio: JSONObject): String {
+        val assets = portfolio.optJSONArray("assets") ?: JSONArray()
+        val categories = mutableSetOf<String>()
+        var includedTargets = 0.0
+        for (index in 0 until assets.length()) {
+            val item = assets.optJSONObject(index) ?: continue
+            val category = item.optString("category", "").trim()
+            if (category.isNotBlank()) {
+                categories.add(category)
+            }
+            if (item.optBoolean("include_in_target", false)) {
+                includedTargets += item.optDouble("target_percent", 0.0)
+            }
+        }
+        return String.format(
+            Locale.US,
+            "%d assets • %d categories • targets %.1f%%",
+            assets.length(),
+            categories.size,
+            includedTargets
+        )
+    }
+
+    private fun checkCloudStatus() {
+        val uri = loadCloudBackupUri()
+        if (uri == null) {
+            showCloudBackupDialog()
+            return
+        }
+
+        try {
+            val raw = contentResolver.openInputStream(uri)
+                ?.bufferedReader()
+                ?.use { it.readText() }
+                ?: throw IllegalStateException("Could not read the connected cloud file.")
+            val root = JSONObject(raw)
+            if (root.optString("format") != "investment.shared.portfolio") {
+                throw IllegalArgumentException("The connected file is not a shared Investment portfolio.")
+            }
+            val remote = root.optJSONObject("sharedPortfolio")
+                ?: throw IllegalArgumentException("Shared portfolio data is missing.")
+            val local = buildSharedPortfolio()
+            val prefs = getSharedPreferences(prefsName, MODE_PRIVATE)
+            val baseline = prefs.getString(cloudSharedFingerprintKey, null)
+            val localFingerprint = sharedFingerprint(local)
+            val remoteFingerprint = sharedFingerprint(remote)
+
+            val state = when {
+                localFingerprint == remoteFingerprint -> "Phone and Cloud match."
+                baseline.isNullOrBlank() -> "First sync needs a choice."
+                localFingerprint != baseline && remoteFingerprint != baseline ->
+                    "Conflict: both Phone and Cloud changed."
+                remoteFingerprint != baseline -> "Cloud has newer/different portfolio data."
+                localFingerprint != baseline -> "Phone has changes waiting to upload."
+                else -> "Phone and Cloud differ."
+            }
+
+            val changed = if (localFingerprint == remoteFingerprint) {
+                0
+            } else {
+                sharedChangeCount(local, remote)
+            }
+
+            AlertDialog.Builder(this)
+                .setTitle("Cloud Status")
+                .setMessage(
+                    state +
+                        "\n\nPhone: " + sharedPortfolioSummary(local) +
+                        "\nCloud: " + sharedPortfolioSummary(remote) +
+                        "\nChanged asset rows: " + changed
+                )
+                .setNegativeButton("Close", null)
+                .setPositiveButton("Sync Now") { _, _ -> syncToCloud() }
+                .show()
+        } catch (error: Exception) {
+            AlertDialog.Builder(this)
+                .setTitle("Cloud Status Failed")
+                .setMessage(
+                    (error.message ?: "Could not check the cloud file.") +
+                        "\n\nIf access expired, choose the cloud file again."
+                )
+                .setPositiveButton("OK", null)
+                .show()
+        }
+    }
+
     private fun syncToCloud(forcePhoneData: Boolean = false) {
         val uri = loadCloudBackupUri()
         if (uri == null) {
@@ -3679,10 +3805,12 @@ class MainActivity : Activity() {
                 val firstSyncConflict = baseline == null && remoteFingerprint != localFingerprint
 
                 if ((remoteChanged && localChanged) || firstSyncConflict) {
+                    val changedRows = sharedChangeCount(localShared, remoteShared)
                     AlertDialog.Builder(this)
                         .setTitle("Cloud Sync Conflict")
                         .setMessage(
-                            "Both copies may contain changes. Choose which portfolio to keep. " +
+                            "Both copies may contain changes. " + changedRows +
+                                " asset row(s) differ. Choose which portfolio to keep. " +
                                 "Platform-specific Windows/Android data will still be preserved."
                         )
                         .setNegativeButton("Cancel", null)
