@@ -76,9 +76,12 @@ class MainActivity : Activity() {
     private val displayUnitKey = "display_unit"
     private val summaryPeriodKey = "summary_period"
     private val autoRefreshMinutesKey = "auto_refresh_minutes"
+    private val categoriesKey = "categories_json"
+    private val undoStackKey = "undo_stack_json"
+    private val redoStackKey = "redo_stack_json"
     private val exportBackupRequestCode = 1001
     private val importBackupRequestCode = 1002
-    private val categories = listOf("Cash", "Gold", "Stocks", "Crypto", "Fund", "Other")
+    private val coreCategories = listOf("Cash", "Gold", "Stocks", "Crypto", "Fund", "Other")
     private val priceSources = listOf("Manual", "Nobitex")
     private val displayUnits = listOf("Toman", "kT", "MT", "Rial")
     private val summaryPeriods = listOf("Day", "Week", "Month", "Year")
@@ -151,6 +154,148 @@ class MainActivity : Activity() {
         if (!prefs.contains(snapshotsKey)) {
             saveSnapshots(emptyList())
         }
+        if (!prefs.contains(categoriesKey)) {
+            saveCategories(coreCategories)
+        }
+    }
+
+    private fun loadCategories(): MutableList<String> {
+        val raw = getSharedPreferences(prefsName, MODE_PRIVATE)
+            .getString(categoriesKey, null)
+
+        if (raw.isNullOrBlank()) {
+            return coreCategories.toMutableList()
+        }
+
+        return try {
+            val array = JSONArray(raw)
+            val result = MutableList(array.length()) { index -> array.getString(index) }
+            coreCategories.forEach { category ->
+                if (!result.contains(category)) {
+                    result.add(category)
+                }
+            }
+            result
+        } catch (_: Exception) {
+            coreCategories.toMutableList()
+        }
+    }
+
+    private fun saveCategories(categories: List<String>) {
+        val unique = mutableListOf<String>()
+        categories.forEach { category ->
+            val value = category.trim()
+            if (value.isNotBlank() && unique.none { it.equals(value, ignoreCase = true) }) {
+                unique.add(value)
+            }
+        }
+
+        coreCategories.forEach { category ->
+            if (unique.none { it.equals(category, ignoreCase = true) }) {
+                unique.add(category)
+            }
+        }
+
+        val array = JSONArray()
+        unique.forEach { array.put(it) }
+
+        getSharedPreferences(prefsName, MODE_PRIVATE)
+            .edit()
+            .putString(categoriesKey, array.toString())
+            .apply()
+    }
+
+    private fun capturePortfolioState(): JSONObject {
+        val prefs = getSharedPreferences(prefsName, MODE_PRIVATE)
+        return JSONObject().apply {
+            put("assets", JSONArray(prefs.getString(assetsKey, "[]") ?: "[]"))
+            put("transactions", JSONArray(prefs.getString(transactionsKey, "[]") ?: "[]"))
+            put("snapshots", JSONArray(prefs.getString(snapshotsKey, "[]") ?: "[]"))
+            put("categories", JSONArray(prefs.getString(categoriesKey, "[]") ?: "[]"))
+            put("tolerance", loadTolerance())
+        }
+    }
+
+    private fun loadStateStack(key: String): MutableList<JSONObject> {
+        val raw = getSharedPreferences(prefsName, MODE_PRIVATE)
+            .getString(key, "[]") ?: "[]"
+
+        return try {
+            val array = JSONArray(raw)
+            MutableList(array.length()) { index -> array.getJSONObject(index) }
+        } catch (_: Exception) {
+            mutableListOf()
+        }
+    }
+
+    private fun saveStateStack(key: String, states: List<JSONObject>) {
+        val array = JSONArray()
+        states.takeLast(10).forEach { array.put(it) }
+        getSharedPreferences(prefsName, MODE_PRIVATE)
+            .edit()
+            .putString(key, array.toString())
+            .apply()
+    }
+
+    private fun pushUndoCheckpoint() {
+        val undo = loadStateStack(undoStackKey)
+        undo.add(capturePortfolioState())
+        saveStateStack(undoStackKey, undo)
+        saveStateStack(redoStackKey, emptyList())
+    }
+
+    private fun restorePortfolioState(state: JSONObject) {
+        getSharedPreferences(prefsName, MODE_PRIVATE)
+            .edit()
+            .putString(assetsKey, state.optJSONArray("assets")?.toString() ?: "[]")
+            .putString(transactionsKey, state.optJSONArray("transactions")?.toString() ?: "[]")
+            .putString(snapshotsKey, state.optJSONArray("snapshots")?.toString() ?: "[]")
+            .putString(
+                categoriesKey,
+                state.optJSONArray("categories")?.toString()
+                    ?: JSONArray(coreCategories).toString()
+            )
+            .putString(
+                toleranceKey,
+                state.optDouble("tolerance", defaultTolerancePercent).toString()
+            )
+            .apply()
+    }
+
+    private fun undoLastChange() {
+        val undo = loadStateStack(undoStackKey)
+        if (undo.isEmpty()) {
+            Toast.makeText(this, "Nothing to undo.", Toast.LENGTH_SHORT).show()
+            return
+        }
+
+        val redo = loadStateStack(redoStackKey)
+        redo.add(capturePortfolioState())
+        val previous = undo.removeAt(undo.lastIndex)
+
+        saveStateStack(undoStackKey, undo)
+        saveStateStack(redoStackKey, redo)
+        restorePortfolioState(previous)
+        showPortfolioScreen()
+        Toast.makeText(this, "Change undone.", Toast.LENGTH_SHORT).show()
+    }
+
+    private fun redoLastChange() {
+        val redo = loadStateStack(redoStackKey)
+        if (redo.isEmpty()) {
+            Toast.makeText(this, "Nothing to redo.", Toast.LENGTH_SHORT).show()
+            return
+        }
+
+        val undo = loadStateStack(undoStackKey)
+        undo.add(capturePortfolioState())
+        val next = redo.removeAt(redo.lastIndex)
+
+        saveStateStack(undoStackKey, undo)
+        saveStateStack(redoStackKey, redo)
+        restorePortfolioState(next)
+        showPortfolioScreen()
+        Toast.makeText(this, "Change restored.", Toast.LENGTH_SHORT).show()
     }
 
     private fun loadAssets(): MutableList<Asset> {
@@ -473,6 +618,7 @@ class MainActivity : Activity() {
             .putString(displayUnitKey, displayUnit)
             .putString(summaryPeriodKey, summaryPeriod)
             .putInt(autoRefreshMinutesKey, autoRefreshMinutes)
+            .putString(categoriesKey, categories.toString())
             .apply()
     }
 
@@ -778,6 +924,29 @@ class MainActivity : Activity() {
             setOnClickListener { showHistoryDialog() }
         }
 
+        val categoriesButton = Button(this).apply {
+            text = "Manage Categories"
+            isAllCaps = false
+            textSize = 16f
+            setOnClickListener { showCategoryManagerDialog() }
+        }
+
+        val undoButton = Button(this).apply {
+            text = "Undo"
+            isAllCaps = false
+            textSize = 16f
+            isEnabled = loadStateStack(undoStackKey).isNotEmpty()
+            setOnClickListener { undoLastChange() }
+        }
+
+        val redoButton = Button(this).apply {
+            text = "Redo"
+            isAllCaps = false
+            textSize = 16f
+            isEnabled = loadStateStack(redoStackKey).isNotEmpty()
+            setOnClickListener { redoLastChange() }
+        }
+
         val settingsButton = Button(this).apply {
             text = "Settings"
             isAllCaps = false
@@ -801,6 +970,7 @@ class MainActivity : Activity() {
                     .setMessage("This will replace assets and clear transaction history.")
                     .setNegativeButton("Cancel", null)
                     .setPositiveButton("Reset") { _, _ ->
+                        pushUndoCheckpoint()
                         saveAssets(demoAssets())
                         saveTransactions(emptyList())
                         saveSnapshots(emptyList())
@@ -830,6 +1000,25 @@ class MainActivity : Activity() {
         container.addView(toleranceButton, buttonParams)
         container.addView(activityButton, buttonParams)
         container.addView(historyButton, buttonParams)
+        container.addView(categoriesButton, buttonParams)
+
+        val undoRedoRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+        }
+        undoRedoRow.addView(
+            undoButton,
+            LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply {
+                marginEnd = dp(5)
+            }
+        )
+        undoRedoRow.addView(
+            redoButton,
+            LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply {
+                marginStart = dp(5)
+            }
+        )
+        container.addView(undoRedoRow, buttonParams)
+
         container.addView(settingsButton, buttonParams)
         container.addView(backupButton, buttonParams)
         container.addView(resetButton, buttonParams)
@@ -906,6 +1095,169 @@ class MainActivity : Activity() {
                 bottomMargin = dp(12)
             }
         )
+    }
+
+    private fun showCategoryManagerDialog() {
+        val categories = loadCategories()
+        val options = categories + "+ Add Category"
+
+        AlertDialog.Builder(this)
+            .setTitle("Categories")
+            .setItems(options.toTypedArray()) { _, which ->
+                if (which == categories.size) {
+                    showAddCategoryDialog()
+                } else {
+                    val category = categories[which]
+                    if (coreCategories.contains(category)) {
+                        AlertDialog.Builder(this)
+                            .setTitle(category)
+                            .setMessage("This is a core category used by portfolio logic. Add a custom category if you need a different label.")
+                            .setPositiveButton("OK", null)
+                            .show()
+                    } else {
+                        showCustomCategoryActions(category)
+                    }
+                }
+            }
+            .setNegativeButton("Close", null)
+            .show()
+    }
+
+    private fun showAddCategoryDialog() {
+        val input = EditText(this).apply {
+            hint = "Category name"
+            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_CAP_SENTENCES
+            setPadding(dp(20), dp(8), dp(20), 0)
+        }
+
+        val dialog = AlertDialog.Builder(this)
+            .setTitle("Add Category")
+            .setView(input)
+            .setNegativeButton("Cancel", null)
+            .setPositiveButton("Add", null)
+            .create()
+
+        dialog.setOnShowListener {
+            dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
+                val name = input.text.toString().trim()
+                val categories = loadCategories()
+
+                when {
+                    name.isBlank() -> input.error = "Enter a category name"
+                    categories.any { it.equals(name, ignoreCase = true) } ->
+                        input.error = "Category already exists"
+                    else -> {
+                        pushUndoCheckpoint()
+                        categories.add(name)
+                        saveCategories(categories)
+                        dialog.dismiss()
+                        showCategoryManagerDialog()
+                    }
+                }
+            }
+        }
+
+        dialog.show()
+    }
+
+    private fun showCustomCategoryActions(category: String) {
+        AlertDialog.Builder(this)
+            .setTitle(category)
+            .setItems(arrayOf("Rename", "Delete")) { _, which ->
+                if (which == 0) {
+                    showRenameCategoryDialog(category)
+                } else {
+                    confirmDeleteCategory(category)
+                }
+            }
+            .setNegativeButton("Cancel", null)
+            .show()
+    }
+
+    private fun showRenameCategoryDialog(oldName: String) {
+        val input = EditText(this).apply {
+            hint = "Category name"
+            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_CAP_SENTENCES
+            setText(oldName)
+            setPadding(dp(20), dp(8), dp(20), 0)
+        }
+
+        val dialog = AlertDialog.Builder(this)
+            .setTitle("Rename Category")
+            .setView(input)
+            .setNegativeButton("Cancel", null)
+            .setPositiveButton("Save", null)
+            .create()
+
+        dialog.setOnShowListener {
+            dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
+                val newName = input.text.toString().trim()
+                val categories = loadCategories()
+
+                when {
+                    newName.isBlank() -> input.error = "Enter a category name"
+                    categories.any {
+                        !it.equals(oldName, ignoreCase = true) &&
+                            it.equals(newName, ignoreCase = true)
+                    } -> input.error = "Category already exists"
+                    newName == oldName -> dialog.dismiss()
+                    else -> {
+                        val assets = loadAssets()
+                        pushUndoCheckpoint()
+
+                        val categoryIndex = categories.indexOf(oldName)
+                        if (categoryIndex >= 0) {
+                            categories[categoryIndex] = newName
+                        }
+
+                        assets.indices.forEach { index ->
+                            if (assets[index].category == oldName) {
+                                assets[index] = assets[index].copy(category = newName)
+                            }
+                        }
+
+                        saveCategories(categories)
+                        saveAssets(assets)
+                        dialog.dismiss()
+                        showPortfolioScreen()
+                    }
+                }
+            }
+        }
+
+        dialog.show()
+    }
+
+    private fun confirmDeleteCategory(category: String) {
+        val usedCount = loadAssets().count { it.category == category }
+        val message = if (usedCount > 0) {
+            "$usedCount asset(s) use this category. They will be moved to Other."
+        } else {
+            "Delete this custom category?"
+        }
+
+        AlertDialog.Builder(this)
+            .setTitle("Delete " + category + "?")
+            .setMessage(message)
+            .setNegativeButton("Cancel", null)
+            .setPositiveButton("Delete") { _, _ ->
+                val categories = loadCategories()
+                val assets = loadAssets()
+
+                pushUndoCheckpoint()
+
+                categories.removeAll { it.equals(category, ignoreCase = true) }
+                assets.indices.forEach { index ->
+                    if (assets[index].category == category) {
+                        assets[index] = assets[index].copy(category = "Other")
+                    }
+                }
+
+                saveCategories(categories)
+                saveAssets(assets)
+                showPortfolioScreen()
+            }
+            .show()
     }
 
     private fun showSettingsDialog() {
@@ -1074,6 +1426,7 @@ class MainActivity : Activity() {
                 }
 
                 val updatedAssets = loadAssets()
+                pushUndoCheckpoint()
                 updatedTargets.forEach { (index, target) ->
                     if (index in updatedAssets.indices) {
                         updatedAssets[index] = updatedAssets[index].copy(targetPercent = target)
@@ -1114,6 +1467,7 @@ class MainActivity : Activity() {
                     return@setOnClickListener
                 }
 
+                pushUndoCheckpoint()
                 saveTolerance(value)
                 dialog.dismiss()
                 showPortfolioScreen()
@@ -1221,17 +1575,19 @@ class MainActivity : Activity() {
             setText(existing?.name ?: "")
         }
 
+        val availableCategories = loadCategories()
         val categorySpinner = Spinner(this)
         val categoryAdapter = ArrayAdapter(
             this,
             android.R.layout.simple_spinner_item,
-            categories
+            availableCategories
         ).apply {
             setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item)
         }
         categorySpinner.adapter = categoryAdapter
         val selectedCategory = existing?.category ?: "Other"
-        val categoryIndex = categories.indexOf(selectedCategory).let { if (it >= 0) it else categories.lastIndex }
+        val categoryIndex = availableCategories.indexOf(selectedCategory)
+            .let { if (it >= 0) it else availableCategories.indexOf("Other").coerceAtLeast(0) }
         categorySpinner.setSelection(categoryIndex)
 
         val quantityInput = EditText(this).apply {
@@ -1347,6 +1703,7 @@ class MainActivity : Activity() {
                             assets.add(updated)
                         }
 
+                        pushUndoCheckpoint()
                         saveAssets(assets)
                         dialog.dismiss()
                         showPortfolioScreen()
@@ -1690,6 +2047,7 @@ class MainActivity : Activity() {
                             )
                         }
 
+                        pushUndoCheckpoint()
                         saveAssets(assets)
                         saveTransactions(transactions)
                         recordSnapshot(assets)
@@ -1802,6 +2160,7 @@ class MainActivity : Activity() {
                 }
 
                 if (!invalid) {
+                    pushUndoCheckpoint()
                     saveAssets(updatedAssets)
                     recordSnapshot(updatedAssets)
                     markPriceUpdate()
@@ -2062,6 +2421,7 @@ class MainActivity : Activity() {
                     saveTransactions(transactions)
                 }
 
+                pushUndoCheckpoint()
                 saveAssets(assets)
                 recordSnapshot(assets)
                 dialog.dismiss()
@@ -2196,6 +2556,7 @@ class MainActivity : Activity() {
             put("displayUnit", loadDisplayUnit())
             put("summaryPeriod", loadSummaryPeriod())
             put("autoRefreshMinutes", loadAutoRefreshMinutes())
+            put("categories", JSONArray(prefs.getString(categoriesKey, "[]") ?: "[]"))
         }.toString(2)
     }
 
@@ -2208,6 +2569,9 @@ class MainActivity : Activity() {
         val displayUnit = root.optString("displayUnit", "Toman")
         val summaryPeriod = root.optString("summaryPeriod", "Month")
         val autoRefreshMinutes = root.optInt("autoRefreshMinutes", 0)
+        val categories = root.optJSONArray("categories") ?: JSONArray(coreCategories)
+
+        pushUndoCheckpoint()
 
         getSharedPreferences(prefsName, MODE_PRIVATE)
             .edit()
@@ -2335,6 +2699,7 @@ class MainActivity : Activity() {
             .setPositiveButton("Delete") { _, _ ->
                 val assets = loadAssets()
                 if (index in assets.indices) {
+                    pushUndoCheckpoint()
                     assets.removeAt(index)
                     saveAssets(assets)
                     showPortfolioScreen()
