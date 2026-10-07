@@ -88,6 +88,7 @@ class MainActivity : Activity() {
     private val appLockHashKey = "app_lock_hash"
     private val cloudBackupUriKey = "cloud_backup_uri"
     private val cloudLastSyncKey = "cloud_last_sync"
+    private val cloudSharedFingerprintKey = "cloud_shared_fingerprint"
     private val exportBackupRequestCode = 1001
     private val importBackupRequestCode = 1002
     private val createCloudBackupRequestCode = 1003
@@ -1058,7 +1059,7 @@ class MainActivity : Activity() {
         }
 
         val subtitle = TextView(this).apply {
-            text = "Your portfolio, one step closer to mobile.\nv0.16.0"
+            text = "Your portfolio, one step closer to mobile.\nv0.17.0"
             textSize = 17f
             gravity = Gravity.CENTER
             setTextColor(Color.DKGRAY)
@@ -3401,6 +3402,7 @@ class MainActivity : Activity() {
                                 .edit()
                                 .remove(cloudBackupUriKey)
                                 .remove(cloudLastSyncKey)
+                                .remove(cloudSharedFingerprintKey)
                                 .apply()
                             Toast.makeText(this, "Cloud backup disconnected.", Toast.LENGTH_SHORT).show()
                         }
@@ -3420,7 +3422,7 @@ class MainActivity : Activity() {
         val intent = Intent(Intent.ACTION_CREATE_DOCUMENT).apply {
             addCategory(Intent.CATEGORY_OPENABLE)
             type = "application/json"
-            putExtra(Intent.EXTRA_TITLE, "InvestmentAndroid-cloud-backup.json")
+            putExtra(Intent.EXTRA_TITLE, "Investment-shared.json")
             addFlags(
                 Intent.FLAG_GRANT_READ_URI_PERMISSION or
                     Intent.FLAG_GRANT_WRITE_URI_PERMISSION or
@@ -3457,7 +3459,78 @@ class MainActivity : Activity() {
         }
     }
 
-    private fun syncToCloud() {
+    private fun sharedFingerprint(portfolio: JSONObject): String {
+        val assets = portfolio.optJSONArray("assets") ?: JSONArray()
+        val normalized = mutableListOf<String>()
+
+        for (index in 0 until assets.length()) {
+            val item = assets.optJSONObject(index) ?: continue
+            normalized.add(
+                listOf(
+                    item.optString("id", ""),
+                    item.optString("name", ""),
+                    item.optString("category", ""),
+                    item.optDouble("quantity", 0.0).toString(),
+                    item.optDouble("price_toman", 0.0).toString(),
+                    item.optDouble("average_cost_toman", 0.0).toString(),
+                    item.optDouble("target_percent", 0.0).toString(),
+                    item.optBoolean("include_in_target", false).toString(),
+                    item.optString("price_source", ""),
+                    item.optString("symbol", "")
+                ).joinToString("|")
+            )
+        }
+
+        normalized.sort()
+        val payload = buildString {
+            append(portfolio.optString("currency", "Toman"))
+            append("\n")
+            append(portfolio.optDouble("rebalance_tolerance_percent", 0.0))
+            append("\n")
+            normalized.forEach {
+                append(it)
+                append("\n")
+            }
+        }
+
+        val digest = MessageDigest.getInstance("SHA-256")
+            .digest(payload.toByteArray(Charsets.UTF_8))
+        return digest.joinToString("") { byte -> "%02x".format(byte) }
+    }
+
+    private fun saveCloudBaseline(portfolio: JSONObject) {
+        getSharedPreferences(prefsName, MODE_PRIVATE)
+            .edit()
+            .putString(cloudSharedFingerprintKey, sharedFingerprint(portfolio))
+            .apply()
+    }
+
+    private fun mergedBackupDocument(existingRaw: String?): JSONObject {
+        val root = try {
+            if (existingRaw.isNullOrBlank()) JSONObject() else JSONObject(existingRaw)
+        } catch (_: Exception) {
+            JSONObject()
+        }
+
+        if (root.optString("format") != "investment.shared.portfolio") {
+            val clean = JSONObject()
+            clean.put("format", "investment.shared.portfolio")
+            clean.put("schemaVersion", 1)
+            clean.put("updatedAt", System.currentTimeMillis())
+            clean.put("sharedPortfolio", buildSharedPortfolio())
+            clean.put("androidBackup", buildAndroidBackupPayload())
+            return clean
+        }
+
+        root.put("format", "investment.shared.portfolio")
+        root.put("schemaVersion", 1)
+        root.put("updatedAt", System.currentTimeMillis())
+        root.put("sharedPortfolio", buildSharedPortfolio())
+        root.put("androidBackup", buildAndroidBackupPayload())
+        return root
+    }
+
+    private fun syncToCloud(forcePhoneData: Boolean = false) {
         val uri = loadCloudBackupUri()
         if (uri == null) {
             showCloudBackupDialog()
@@ -3465,15 +3538,66 @@ class MainActivity : Activity() {
         }
 
         try {
+            val existingRaw = contentResolver.openInputStream(uri)
+                ?.bufferedReader()
+                ?.use { it.readText() }
+
+            val existingRoot = try {
+                if (existingRaw.isNullOrBlank()) null else JSONObject(existingRaw)
+            } catch (_: Exception) {
+                null
+            }
+
+            val remoteShared = existingRoot
+                ?.takeIf { it.optString("format") == "investment.shared.portfolio" }
+                ?.optJSONObject("sharedPortfolio")
+
+            val localShared = buildSharedPortfolio()
+            val prefs = getSharedPreferences(prefsName, MODE_PRIVATE)
+            val baseline = prefs.getString(cloudSharedFingerprintKey, null)
+            val localFingerprint = sharedFingerprint(localShared)
+            val remoteFingerprint = remoteShared?.let { sharedFingerprint(it) }
+
+            if (!forcePhoneData && remoteShared != null) {
+                val remoteChanged = baseline != null && remoteFingerprint != baseline
+                val localChanged = baseline != null && localFingerprint != baseline
+                val firstSyncConflict = baseline == null && remoteFingerprint != localFingerprint
+
+                if ((remoteChanged && localChanged) || firstSyncConflict) {
+                    AlertDialog.Builder(this)
+                        .setTitle("Cloud Sync Conflict")
+                        .setMessage(
+                            "Both copies may contain changes. Choose which portfolio to keep. " +
+                                "Platform-specific Windows/Android data will still be preserved."
+                        )
+                        .setNegativeButton("Cancel", null)
+                        .setNeutralButton("Use Cloud") { _, _ ->
+                            loadFromCloud()
+                        }
+                        .setPositiveButton("Use Phone") { _, _ ->
+                            syncToCloud(forcePhoneData = true)
+                        }
+                        .show()
+                    return
+                }
+
+                if (remoteChanged && !localChanged) {
+                    loadFromCloud()
+                    return
+                }
+            }
+
+            val document = mergedBackupDocument(existingRaw)
             val stream = contentResolver.openOutputStream(uri, "wt")
                 ?: throw IllegalStateException("Could not open the cloud backup file for writing.")
 
             stream.bufferedWriter().use { writer ->
-                writer.write(createBackupJson())
+                writer.write(document.toString(2))
             }
 
+            saveCloudBaseline(document.getJSONObject("sharedPortfolio"))
             markCloudSync()
-            Toast.makeText(this, "Cloud backup updated.", Toast.LENGTH_SHORT).show()
+            Toast.makeText(this, "Cloud backup updated safely.", Toast.LENGTH_SHORT).show()
         } catch (error: Exception) {
             AlertDialog.Builder(this)
                 .setTitle("Cloud Sync Failed")
@@ -3509,7 +3633,11 @@ class MainActivity : Activity() {
             val raw = contentResolver.openInputStream(uri)?.bufferedReader()?.use { it.readText() }
                 ?: throw IllegalStateException("Could not read the cloud backup file.")
 
+            val root = JSONObject(raw)
             restoreBackupJson(raw)
+            root.takeIf { it.optString("format") == "investment.shared.portfolio" }
+                ?.optJSONObject("sharedPortfolio")
+                ?.let { saveCloudBaseline(it) }
             markCloudSync()
             Toast.makeText(this, "Cloud backup loaded.", Toast.LENGTH_SHORT).show()
             showPortfolioScreen()
@@ -3758,9 +3886,11 @@ class MainActivity : Activity() {
                     saveCloudBackupUri(uri)
                     val stream = contentResolver.openOutputStream(uri, "wt")
                         ?: throw IllegalStateException("Could not create cloud backup file.")
+                    val document = mergedBackupDocument(null)
                     stream.bufferedWriter().use { writer ->
-                        writer.write(createBackupJson())
+                        writer.write(document.toString(2))
                     }
+                    saveCloudBaseline(document.getJSONObject("sharedPortfolio"))
                     markCloudSync()
                     Toast.makeText(this, "Cloud backup connected and saved.", Toast.LENGTH_SHORT).show()
                 }
@@ -3786,7 +3916,7 @@ class MainActivity : Activity() {
                         .setTitle("Cloud Backup Connected")
                         .setMessage("The file is connected. Load its data now or keep this phone's data?")
                         .setNegativeButton("Keep Phone Data") { _, _ ->
-                            syncToCloud()
+                            syncToCloud(forcePhoneData = true)
                         }
                         .setPositiveButton("Load Cloud Data") { _, _ ->
                             loadFromCloud()
