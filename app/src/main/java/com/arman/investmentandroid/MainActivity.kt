@@ -1105,7 +1105,7 @@ class MainActivity : Activity() {
         }
 
         val subtitle = TextView(this).apply {
-            text = "Your portfolio, one step closer to mobile.\nv0.25.0"
+            text = "Your portfolio, one step closer to mobile.\nv0.26.0"
             textSize = 17f
             gravity = Gravity.CENTER
             setTextColor(Color.DKGRAY)
@@ -1386,7 +1386,7 @@ class MainActivity : Activity() {
         container.addView(backButton, buttonParams)
         container.addView(
             TextView(this).apply {
-                text = "Investment Android • v0.25.0"
+                text = "Investment Android • v0.26.0"
                 textSize = 12f
                 gravity = Gravity.CENTER
                 setTextColor(Color.GRAY)
@@ -3584,20 +3584,25 @@ class MainActivity : Activity() {
         val lastSync = prefs.getLong(cloudLastSyncKey, 0L)
 
         return buildString {
-            append(if (connected) "Cloud backup file connected." else "No cloud backup file connected.")
-            append("\nSmart sync: ")
-            append(
-                if (isCloudAutoSyncEnabled()) {
-                    "On • every " + loadCloudAutoSyncMinutes() + " min while app is open"
-                } else {
-                    "Off"
+            if (connected) {
+                append("Cloud file connected.")
+                append("\nSmart sync: ")
+                append(
+                    if (isCloudAutoSyncEnabled()) {
+                        "On • every " + loadCloudAutoSyncMinutes() + " min while app is open"
+                    } else {
+                        "Off"
+                    }
+                )
+                if (lastSync > 0L) {
+                    append("\nLast sync: ")
+                    append(formatDate(lastSync))
                 }
-            )
-            if (lastSync > 0L) {
-                append("\nLast sync: ")
-                append(formatDate(lastSync))
+            } else {
+                append("Cloud is not connected yet.")
+                append("\nChoose the existing Investment-shared.json from Google Drive,")
+                append(" or create it there if this is your first device.")
             }
-            append("\n\nTip: in the Android file picker, choose Google Drive to keep the backup in Drive.")
         }
     }
 
@@ -3614,10 +3619,12 @@ class MainActivity : Activity() {
                 "Disconnect Cloud File"
             )
         } else {
-            arrayOf(
-                "Create Cloud Backup File",
-                "Connect Existing Backup File"
-            )
+            emptyArray()
+        }
+
+        if (!connected) {
+            showCloudFirstConnectDialog()
+            return
         }
 
         AlertDialog.Builder(this)
@@ -3652,14 +3659,27 @@ class MainActivity : Activity() {
                             Toast.makeText(this, "Cloud backup disconnected.", Toast.LENGTH_SHORT).show()
                         }
                     }
-                } else {
-                    when (which) {
-                        0 -> createCloudBackupFile()
-                        1 -> connectExistingCloudBackup()
-                    }
                 }
             }
             .setNegativeButton("Close", null)
+            .show()
+    }
+
+    private fun showCloudFirstConnectDialog() {
+        AlertDialog.Builder(this)
+            .setTitle("Connect Google Drive")
+            .setMessage(
+                "Recommended: use the same Investment-shared.json file as Windows.\n\n" +
+                    "On the next screen, open the menu (☰), choose Google Drive, then select " +
+                    "Investment-shared.json.\n\nIf the file does not exist yet, choose Create New instead."
+            )
+            .setPositiveButton("Choose Existing File") { _, _ ->
+                connectExistingCloudBackup()
+            }
+            .setNeutralButton("Create New") { _, _ ->
+                createCloudBackupFile()
+            }
+            .setNegativeButton("Cancel", null)
             .show()
     }
 
@@ -3703,14 +3723,27 @@ class MainActivity : Activity() {
     private fun connectExistingCloudBackup() {
         val intent = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
             addCategory(Intent.CATEGORY_OPENABLE)
-            type = "application/json"
+            // Some Drive uploads expose JSON as text/plain or application/octet-stream.
+            // Do not hide a valid Investment-shared.json because of provider MIME metadata.
+            type = "*/*"
             addFlags(
                 Intent.FLAG_GRANT_READ_URI_PERMISSION or
                     Intent.FLAG_GRANT_WRITE_URI_PERMISSION or
                     Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION
             )
         }
-        startActivityForResult(intent, connectCloudBackupRequestCode)
+        try {
+            startActivityForResult(intent, connectCloudBackupRequestCode)
+        } catch (error: Exception) {
+            AlertDialog.Builder(this)
+                .setTitle("File Picker Unavailable")
+                .setMessage(
+                    "Android could not open the system file picker. Make sure the Google Drive app " +
+                        "is installed, signed in, and enabled, then try again."
+                )
+                .setPositiveButton("OK", null)
+                .show()
+        }
     }
 
     private fun takePersistentCloudPermission(uri: android.net.Uri, data: Intent?) {
@@ -4441,10 +4474,28 @@ class MainActivity : Activity() {
         super.onActivityResult(requestCode, resultCode, data)
 
         if (resultCode != RESULT_OK) {
+            if (
+                requestCode == createCloudBackupRequestCode ||
+                requestCode == connectCloudBackupRequestCode
+            ) {
+                Toast.makeText(
+                    this,
+                    "No cloud file selected. Cloud remains disconnected.",
+                    Toast.LENGTH_LONG
+                ).show()
+            }
             return
         }
 
-        val uri = data?.data ?: return
+        val uri = data?.data ?: run {
+            if (
+                requestCode == createCloudBackupRequestCode ||
+                requestCode == connectCloudBackupRequestCode
+            ) {
+                Toast.makeText(this, "No file was returned by Android.", Toast.LENGTH_LONG).show()
+            }
+            return
+        }
 
         try {
             when (requestCode) {
