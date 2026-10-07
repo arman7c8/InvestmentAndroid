@@ -839,115 +839,22 @@ class MainActivity : Activity() {
             }
         )
 
-        container.addView(
-            TextView(this).apply {
-                text = "Total Portfolio Value"
-                textSize = 15f
-                setTextColor(Color.DKGRAY)
-                setPadding(0, dp(24), 0, dp(4))
-            }
+        addOverviewCard(
+            parent = container,
+            assets = assets,
+            totalValue = totalValue,
+            totalInvested = totalInvested,
+            totalProfit = totalProfit,
+            targetPortfolioValue = targetPortfolioValue,
+            totalTarget = totalTarget,
+            tolerance = tolerance,
+            snapshotChange = snapshotChange
         )
 
-        container.addView(
-            TextView(this).apply {
-                text = formatToman(totalValue)
-                textSize = 25f
-                setTypeface(typeface, Typeface.BOLD)
-                setTextColor(Color.rgb(25, 25, 25))
-            }
-        )
-
-        container.addView(
-            TextView(this).apply {
-                text = "Invested: " + formatToman(totalInvested)
-                textSize = 14f
-                setTextColor(Color.DKGRAY)
-                setPadding(0, dp(10), 0, dp(2))
-            }
-        )
-
-        container.addView(
-            TextView(this).apply {
-                text = "Unrealized P/L: " + formatSignedToman(totalProfit)
-                textSize = 15f
-                setTypeface(typeface, Typeface.BOLD)
-                setTextColor(
-                    when {
-                        totalProfit > 0.0 -> Color.rgb(25, 125, 70)
-                        totalProfit < 0.0 -> Color.rgb(180, 45, 45)
-                        else -> Color.DKGRAY
-                    }
-                )
-                setPadding(0, 0, 0, dp(8))
-            }
-        )
-
-        val lastPriceUpdate = loadLastPriceUpdate()
-        if (lastPriceUpdate > 0L) {
-            container.addView(
-                TextView(this).apply {
-                    text = "Last price update: " + formatDate(lastPriceUpdate)
-                    textSize = 12f
-                    setTextColor(Color.GRAY)
-                    setPadding(0, 0, 0, dp(5))
-                }
-            )
-        }
-
-        if (snapshotChange != null) {
-            container.addView(
-                TextView(this).apply {
-                    text = "Change since previous snapshot: " + formatSignedToman(snapshotChange)
-                    textSize = 13f
-                    setTextColor(
-                        when {
-                            snapshotChange > 0.0 -> Color.rgb(25, 125, 70)
-                            snapshotChange < 0.0 -> Color.rgb(180, 45, 45)
-                            else -> Color.GRAY
-                        }
-                    )
-                    setPadding(0, 0, 0, dp(8))
-                }
-            )
-        }
-
-        container.addView(
-            TextView(this).apply {
-                text = String.format(Locale.US, "Target total: %.1f%%", totalTarget)
-                textSize = 14f
-                setTypeface(typeface, Typeface.BOLD)
-                setTextColor(
-                    if (kotlin.math.abs(totalTarget - 100.0) <= 0.01) {
-                        Color.rgb(25, 125, 70)
-                    } else {
-                        Color.rgb(185, 110, 25)
-                    }
-                )
-                setPadding(0, 0, 0, dp(4))
-            }
-        )
-
-        if (kotlin.math.abs(totalTarget - 100.0) > 0.01) {
-            container.addView(
-                TextView(this).apply {
-                    text = "Targets should add up to 100% for a complete rebalance plan."
-                    textSize = 12f
-                    setTextColor(Color.GRAY)
-                    setPadding(0, 0, 0, dp(18))
-                }
-            )
-        } else {
-            container.addView(
-                TextView(this).apply {
-                    text = String.format(Locale.US, "Rebalance tolerance: ±%.1f%%", tolerance)
-                    textSize = 12f
-                    setTextColor(Color.GRAY)
-                    setPadding(0, 0, 0, dp(18))
-                }
-            )
-        }
-
+        addCategorySummary(container, assets, totalValue)
         addPeriodSummary(container, loadSummaryPeriod())
+
+
 
         if (assets.isEmpty()) {
             container.addView(
@@ -955,34 +862,17 @@ class MainActivity : Activity() {
                     text = "No assets yet. Tap Add Asset to create your first one."
                     textSize = 16f
                     setTextColor(Color.DKGRAY)
-                    setPadding(0, dp(12), 0, dp(22))
+                    setPadding(0, dp(14), 0, dp(22))
                 }
             )
         } else {
-            assets.withIndex()
-                .sortedByDescending { it.value.value }
-                .forEach { indexedAsset ->
-                    val asset = indexedAsset.value
-                    val allocation = if (totalValue > 0.0) {
-                        asset.value / totalValue * 100.0
-                    } else {
-                        0.0
-                    }
-                    val targetAllocation = if (asset.includeInTarget && targetPortfolioValue > 0.0) {
-                        asset.value / targetPortfolioValue * 100.0
-                    } else {
-                        0.0
-                    }
-                    addAssetCard(
-                        parent = container,
-                        asset = asset,
-                        allocation = allocation,
-                        targetAllocation = targetAllocation,
-                        targetPortfolioValue = targetPortfolioValue,
-                        tolerancePercent = tolerance,
-                        index = indexedAsset.index
-                    )
-                }
+            addGroupedHoldings(
+                parent = container,
+                assets = assets,
+                totalValue = totalValue,
+                targetPortfolioValue = targetPortfolioValue,
+                tolerance = tolerance
+            )
         }
 
         val addButton = Button(this).apply {
@@ -1018,6 +908,13 @@ class MainActivity : Activity() {
             isAllCaps = false
             textSize = 16f
             setOnClickListener { showActivityDialog() }
+        }
+
+        val moreToolsButton = Button(this).apply {
+            text = "More Tools"
+            isAllCaps = false
+            textSize = 16f
+            setOnClickListener { showToolsDialog() }
         }
 
         val historyButton = Button(this).apply {
@@ -1097,13 +994,50 @@ class MainActivity : Activity() {
         }
 
         addRebalanceSummary(container, targetAssets, targetPortfolioValue, totalTarget, tolerance)
-        container.addView(addButton, buttonParams)
-        container.addView(priceCenterButton, buttonParams)
-        container.addView(targetsButton, buttonParams)
-        container.addView(toleranceButton, buttonParams)
-        container.addView(activityButton, buttonParams)
-        container.addView(historyButton, buttonParams)
-        container.addView(categoriesButton, buttonParams)
+
+        container.addView(
+            TextView(this).apply {
+                text = "Quick Actions"
+                textSize = 19f
+                setTypeface(typeface, Typeface.BOLD)
+                setTextColor(Color.rgb(35, 35, 35))
+                setPadding(0, dp(22), 0, dp(6))
+            }
+        )
+
+        val primaryRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+        }
+        primaryRow.addView(
+            addButton,
+            LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply {
+                marginEnd = dp(5)
+            }
+        )
+        primaryRow.addView(
+            priceCenterButton,
+            LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply {
+                marginStart = dp(5)
+            }
+        )
+        container.addView(primaryRow, buttonParams)
+
+        val secondaryRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+        }
+        secondaryRow.addView(
+            activityButton,
+            LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply {
+                marginEnd = dp(5)
+            }
+        )
+        secondaryRow.addView(
+            moreToolsButton,
+            LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply {
+                marginStart = dp(5)
+            }
+        )
+        container.addView(secondaryRow, buttonParams)
 
         val undoRedoRow = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
@@ -1122,16 +1056,332 @@ class MainActivity : Activity() {
         )
         container.addView(undoRedoRow, buttonParams)
 
-        container.addView(settingsButton, buttonParams)
-        container.addView(backupButton, buttonParams)
-        container.addView(resetButton, buttonParams)
         container.addView(backButton, buttonParams)
+        container.addView(
+            TextView(this).apply {
+                text = "Investment Android • v0.13.0"
+                textSize = 12f
+                gravity = Gravity.CENTER
+                setTextColor(Color.GRAY)
+                setPadding(0, dp(18), 0, dp(4))
+            }
+        )
 
         setContentView(
             ScrollView(this).apply {
                 addView(container)
             }
         )
+    }
+
+    private fun addOverviewCard(
+        parent: LinearLayout,
+        assets: List<Asset>,
+        totalValue: Double,
+        totalInvested: Double,
+        totalProfit: Double,
+        targetPortfolioValue: Double,
+        totalTarget: Double,
+        tolerance: Double,
+        snapshotChange: Double?
+    ) {
+        val targetValid = kotlin.math.abs(totalTarget - 100.0) <= 0.01
+        val needAttention = if (targetValid && targetPortfolioValue > 0.0) {
+            assets.count { asset ->
+                if (!asset.includeInTarget || asset.targetPercent <= 0.0) {
+                    false
+                } else {
+                    val current = asset.value / targetPortfolioValue * 100.0
+                    kotlin.math.abs(current - asset.targetPercent) > tolerance
+                }
+            }
+        } else {
+            0
+        }
+
+        val card = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(18), dp(16), dp(18), dp(16))
+            background = GradientDrawable().apply {
+                setColor(Color.WHITE)
+                cornerRadius = dp(16).toFloat()
+                setStroke(dp(1), Color.rgb(225, 225, 225))
+            }
+        }
+
+        card.addView(
+            TextView(this).apply {
+                text = "Total Portfolio Value"
+                textSize = 13f
+                setTextColor(Color.GRAY)
+            }
+        )
+
+        card.addView(
+            TextView(this).apply {
+                text = formatToman(totalValue)
+                textSize = 27f
+                setTypeface(typeface, Typeface.BOLD)
+                setTextColor(Color.rgb(25, 25, 25))
+                setPadding(0, dp(2), 0, dp(10))
+            }
+        )
+
+        card.addView(
+            TextView(this).apply {
+                text = "Invested: " + formatToman(totalInvested)
+                textSize = 13f
+                setTextColor(Color.DKGRAY)
+            }
+        )
+
+        card.addView(
+            TextView(this).apply {
+                text = "Unrealized P/L: " + formatSignedToman(totalProfit)
+                textSize = 15f
+                setTypeface(typeface, Typeface.BOLD)
+                setTextColor(
+                    when {
+                        totalProfit > 0.0 -> Color.rgb(25, 125, 70)
+                        totalProfit < 0.0 -> Color.rgb(180, 45, 45)
+                        else -> Color.DKGRAY
+                    }
+                )
+                setPadding(0, dp(2), 0, dp(8))
+            }
+        )
+
+        if (snapshotChange != null) {
+            card.addView(
+                TextView(this).apply {
+                    text = "Since previous snapshot: " + formatSignedToman(snapshotChange)
+                    textSize = 13f
+                    setTextColor(
+                        when {
+                            snapshotChange > 0.0 -> Color.rgb(25, 125, 70)
+                            snapshotChange < 0.0 -> Color.rgb(180, 45, 45)
+                            else -> Color.GRAY
+                        }
+                    )
+                    setPadding(0, 0, 0, dp(6))
+                }
+            )
+        }
+
+        val lastPriceUpdate = loadLastPriceUpdate()
+        card.addView(
+            TextView(this).apply {
+                text = if (lastPriceUpdate > 0L) {
+                    "Prices updated: " + formatDate(lastPriceUpdate)
+                } else {
+                    "Prices have not been updated yet."
+                }
+                textSize = 12f
+                setTextColor(Color.GRAY)
+            }
+        )
+
+        card.addView(
+            TextView(this).apply {
+                text = when {
+                    !targetValid -> String.format(
+                        Locale.US,
+                        "Portfolio Health: Fix targets (total %.1f%%)",
+                        totalTarget
+                    )
+                    needAttention == 0 -> "Portfolio Health: On target"
+                    else -> "Portfolio Health: " + needAttention + " asset(s) need attention"
+                }
+                textSize = 14f
+                setTypeface(typeface, Typeface.BOLD)
+                setTextColor(
+                    when {
+                        !targetValid -> Color.rgb(185, 110, 25)
+                        needAttention == 0 -> Color.rgb(25, 125, 70)
+                        else -> Color.rgb(185, 110, 25)
+                    }
+                )
+                setPadding(0, dp(9), 0, 0)
+            }
+        )
+
+        parent.addView(
+            card,
+            LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            ).apply {
+                topMargin = dp(18)
+                bottomMargin = dp(8)
+            }
+        )
+    }
+
+    private fun addCategorySummary(
+        parent: LinearLayout,
+        assets: List<Asset>,
+        totalValue: Double
+    ) {
+        parent.addView(
+            TextView(this).apply {
+                text = "Category Breakdown"
+                textSize = 19f
+                setTypeface(typeface, Typeface.BOLD)
+                setTextColor(Color.rgb(35, 35, 35))
+                setPadding(0, dp(14), 0, dp(6))
+            }
+        )
+
+        if (assets.isEmpty()) {
+            return
+        }
+
+        assets.groupBy { it.category }
+            .mapValues { entry -> entry.value.sumOf { it.value } }
+            .toList()
+            .sortedByDescending { it.second }
+            .forEach { (category, value) ->
+                val allocation = if (totalValue > 0.0) value / totalValue * 100.0 else 0.0
+                parent.addView(
+                    TextView(this).apply {
+                        text = String.format(
+                            Locale.US,
+                            "%s  •  %.1f%%  •  %s",
+                            category,
+                            allocation,
+                            formatToman(value)
+                        )
+                        textSize = 13f
+                        setTextColor(Color.DKGRAY)
+                        setPadding(dp(12), dp(8), dp(12), dp(8))
+                        background = GradientDrawable().apply {
+                            setColor(Color.WHITE)
+                            cornerRadius = dp(10).toFloat()
+                            setStroke(dp(1), Color.rgb(232, 232, 232))
+                        }
+                    },
+                    LinearLayout.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT,
+                        ViewGroup.LayoutParams.WRAP_CONTENT
+                    ).apply {
+                        bottomMargin = dp(5)
+                    }
+                )
+            }
+    }
+
+    private fun addGroupedHoldings(
+        parent: LinearLayout,
+        assets: List<Asset>,
+        totalValue: Double,
+        targetPortfolioValue: Double,
+        tolerance: Double
+    ) {
+        parent.addView(
+            TextView(this).apply {
+                text = "Holdings"
+                textSize = 21f
+                setTypeface(typeface, Typeface.BOLD)
+                setTextColor(Color.rgb(35, 35, 35))
+                setPadding(0, dp(18), 0, dp(8))
+            }
+        )
+
+        val indexedAssets = assets.withIndex().toList()
+        val grouped = indexedAssets
+            .groupBy { it.value.category }
+            .toList()
+            .sortedByDescending { entry -> entry.second.sumOf { it.value.value } }
+
+        grouped.forEach { (category, categoryAssets) ->
+            val categoryValue = categoryAssets.sumOf { it.value.value }
+            val categoryAllocation = if (totalValue > 0.0) categoryValue / totalValue * 100.0 else 0.0
+
+            parent.addView(
+                TextView(this).apply {
+                    text = String.format(
+                        Locale.US,
+                        "%s  •  %.1f%%  •  %s",
+                        category,
+                        categoryAllocation,
+                        formatToman(categoryValue)
+                    )
+                    textSize = 15f
+                    setTypeface(typeface, Typeface.BOLD)
+                    setTextColor(Color.rgb(55, 55, 55))
+                    setPadding(0, dp(8), 0, dp(7))
+                }
+            )
+
+            categoryAssets
+                .sortedByDescending { it.value.value }
+                .forEach { indexedAsset ->
+                    val asset = indexedAsset.value
+                    val allocation = if (totalValue > 0.0) {
+                        asset.value / totalValue * 100.0
+                    } else {
+                        0.0
+                    }
+                    val targetAllocation = if (asset.includeInTarget && targetPortfolioValue > 0.0) {
+                        asset.value / targetPortfolioValue * 100.0
+                    } else {
+                        0.0
+                    }
+
+                    addAssetCard(
+                        parent = parent,
+                        asset = asset,
+                        allocation = allocation,
+                        targetAllocation = targetAllocation,
+                        targetPortfolioValue = targetPortfolioValue,
+                        tolerancePercent = tolerance,
+                        index = indexedAsset.index
+                    )
+                }
+        }
+    }
+
+    private fun showToolsDialog() {
+        val options = arrayOf(
+            "Edit Targets",
+            "Rebalance Tolerance",
+            "Portfolio History",
+            "Manage Categories",
+            "Settings",
+            "Backup / Restore",
+            "Reset Demo Data"
+        )
+
+        AlertDialog.Builder(this)
+            .setTitle("Portfolio Tools")
+            .setItems(options) { _, which ->
+                when (which) {
+                    0 -> showTargetsDialog()
+                    1 -> showToleranceDialog()
+                    2 -> showHistoryDialog()
+                    3 -> showCategoryManagerDialog()
+                    4 -> showSettingsDialog()
+                    5 -> showBackupDialog()
+                    6 -> showResetDemoDialog()
+                }
+            }
+            .setNegativeButton("Close", null)
+            .show()
+    }
+
+    private fun showResetDemoDialog() {
+        AlertDialog.Builder(this)
+            .setTitle("Reset demo data?")
+            .setMessage("This will replace assets and clear transaction history.")
+            .setNegativeButton("Cancel", null)
+            .setPositiveButton("Reset") { _, _ ->
+                pushUndoCheckpoint()
+                saveAssets(demoAssets())
+                saveTransactions(emptyList())
+                saveSnapshots(emptyList())
+                showPortfolioScreen()
+            }
+            .show()
     }
 
     private fun addPeriodSummary(parent: LinearLayout, period: String) {
