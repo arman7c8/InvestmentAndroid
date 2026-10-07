@@ -1105,7 +1105,7 @@ class MainActivity : Activity() {
         }
 
         val subtitle = TextView(this).apply {
-            text = "Your portfolio, one step closer to mobile.\nv0.27.0"
+            text = "Your portfolio, one step closer to mobile.\nv0.28.0"
             textSize = 17f
             gravity = Gravity.CENTER
             setTextColor(Color.DKGRAY)
@@ -1386,7 +1386,7 @@ class MainActivity : Activity() {
         container.addView(backButton, buttonParams)
         container.addView(
             TextView(this).apply {
-                text = "Investment Android • v0.27.0"
+                text = "Investment Android • v0.28.0"
                 textSize = 12f
                 gravity = Gravity.CENTER
                 setTextColor(Color.GRAY)
@@ -3928,7 +3928,12 @@ class MainActivity : Activity() {
             val remoteFingerprint = sharedFingerprint(remote)
 
             when {
-                localFingerprint == remoteFingerprint -> Unit
+                localFingerprint == remoteFingerprint -> {
+                    // Both copies already agree. Refresh the baseline too; otherwise an
+                    // old baseline can make the next one-sided edit look like a conflict.
+                    saveCloudBaseline(remote)
+                    markCloudSync()
+                }
                 localFingerprint == baseline && remoteFingerprint != baseline -> {
                     restoreBackupJson(raw)
                     saveCloudBaseline(remote)
@@ -3983,6 +3988,11 @@ class MainActivity : Activity() {
             val baseline = prefs.getString(cloudSharedFingerprintKey, null)
             val localFingerprint = sharedFingerprint(local)
             val remoteFingerprint = sharedFingerprint(remote)
+
+            if (localFingerprint == remoteFingerprint && baseline != localFingerprint) {
+                saveCloudBaseline(remote)
+                markCloudSync()
+            }
 
             val state = when {
                 localFingerprint == remoteFingerprint -> "Phone and Cloud match."
@@ -4050,6 +4060,23 @@ class MainActivity : Activity() {
             val baseline = prefs.getString(cloudSharedFingerprintKey, null)
             val localFingerprint = sharedFingerprint(localShared)
             val remoteFingerprint = remoteShared?.let { sharedFingerprint(it) }
+
+            if (
+                !forcePhoneData &&
+                remoteShared != null &&
+                remoteFingerprint == localFingerprint
+            ) {
+                // The portfolio is already identical on both sides. Treat this as a
+                // successful sync and re-anchor the baseline instead of reporting a
+                // false "both changed" conflict from an older baseline.
+                saveCloudBaseline(remoteShared)
+                markCloudSync()
+                Toast.makeText(this, "Phone and Cloud already match.", Toast.LENGTH_SHORT).show()
+                if (onPortfolioScreen) {
+                    showPortfolioScreen()
+                }
+                return
+            }
 
             if (!forcePhoneData && remoteShared != null) {
                 val remoteChanged = baseline != null && remoteFingerprint != baseline
