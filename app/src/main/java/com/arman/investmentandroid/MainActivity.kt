@@ -90,6 +90,7 @@ class MainActivity : Activity() {
     private val cloudLastSyncKey = "cloud_last_sync"
     private val cloudSharedFingerprintKey = "cloud_shared_fingerprint"
     private val cloudAutoSyncKey = "cloud_auto_sync"
+    private val cloudAutoSyncMinutesKey = "cloud_auto_sync_minutes"
     private val cloudLastAutoCheckKey = "cloud_last_auto_check"
     private val exportBackupRequestCode = 1001
     private val importBackupRequestCode = 1002
@@ -106,6 +107,8 @@ class MainActivity : Activity() {
     private var onPriceCenterScreen = false
     private val autoRefreshHandler = Handler(Looper.getMainLooper())
     private var autoRefreshRunnable: Runnable? = null
+    private val cloudSyncHandler = Handler(Looper.getMainLooper())
+    private var cloudSyncRunnable: Runnable? = null
 
     private fun dp(value: Int): Int =
         (value * resources.displayMetrics.density).toInt()
@@ -125,15 +128,12 @@ class MainActivity : Activity() {
     override fun onResume() {
         super.onResume()
         scheduleAutoRefresh()
-        autoRefreshHandler.postDelayed({
-            if (onPortfolioScreen) {
-                smartCloudSyncOnResume()
-            }
-        }, 700L)
+        scheduleSmartCloudSync()
     }
 
     override fun onPause() {
         stopAutoRefresh()
+        stopSmartCloudSync()
         super.onPause()
     }
 
@@ -1068,7 +1068,7 @@ class MainActivity : Activity() {
         }
 
         val subtitle = TextView(this).apply {
-            text = "Your portfolio, one step closer to mobile.\nv0.21.0"
+            text = "Your portfolio, one step closer to mobile.\nv0.22.0"
             textSize = 17f
             gravity = Gravity.CENTER
             setTextColor(Color.DKGRAY)
@@ -1349,7 +1349,7 @@ class MainActivity : Activity() {
         container.addView(backButton, buttonParams)
         container.addView(
             TextView(this).apply {
-                text = "Investment Android • v0.21.0"
+                text = "Investment Android • v0.22.0"
                 textSize = 12f
                 gravity = Gravity.CENTER
                 setTextColor(Color.GRAY)
@@ -1423,7 +1423,13 @@ class MainActivity : Activity() {
             TextView(this).apply {
                 text = buildString {
                     append(localCloudSyncState())
-                    append(if (isCloudAutoSyncEnabled()) " • Smart sync on" else " • Smart sync off")
+                    append(
+                        if (isCloudAutoSyncEnabled()) {
+                            " • Smart sync " + loadCloudAutoSyncMinutes() + "m"
+                        } else {
+                            " • Smart sync off"
+                        }
+                    )
                     if (lastSync > 0L) {
                         append(" • ")
                         append(formatDate(lastSync))
@@ -3484,11 +3490,55 @@ class MainActivity : Activity() {
         getSharedPreferences(prefsName, MODE_PRIVATE)
             .getBoolean(cloudAutoSyncKey, true)
 
+    private fun loadCloudAutoSyncMinutes(): Int =
+        getSharedPreferences(prefsName, MODE_PRIVATE)
+            .getInt(cloudAutoSyncMinutesKey, 15)
+            .let { if (it in listOf(5, 15, 30, 60)) it else 15 }
+
     private fun setCloudAutoSyncEnabled(enabled: Boolean) {
         getSharedPreferences(prefsName, MODE_PRIVATE)
             .edit()
             .putBoolean(cloudAutoSyncKey, enabled)
             .apply()
+        scheduleSmartCloudSync()
+    }
+
+    private fun setCloudAutoSyncMinutes(minutes: Int) {
+        getSharedPreferences(prefsName, MODE_PRIVATE)
+            .edit()
+            .putInt(cloudAutoSyncMinutesKey, minutes)
+            .apply()
+        scheduleSmartCloudSync()
+    }
+
+    private fun stopSmartCloudSync() {
+        cloudSyncRunnable?.let { cloudSyncHandler.removeCallbacks(it) }
+        cloudSyncRunnable = null
+    }
+
+    private fun scheduleSmartCloudSync() {
+        stopSmartCloudSync()
+        if (!isCloudAutoSyncEnabled() || loadCloudBackupUri() == null) {
+            return
+        }
+
+        val delay = loadCloudAutoSyncMinutes() * 60_000L
+        val runnable = object : Runnable {
+            override fun run() {
+                if (onPortfolioScreen) {
+                    smartCloudSyncCheck()
+                }
+                cloudSyncHandler.postDelayed(this, delay)
+            }
+        }
+
+        cloudSyncRunnable = runnable
+        cloudSyncHandler.postDelayed({
+            if (onPortfolioScreen) {
+                smartCloudSyncCheck()
+            }
+        }, 700L)
+        cloudSyncHandler.postDelayed(runnable, delay)
     }
 
     private fun cloudStatusText(): String {
@@ -3498,8 +3548,14 @@ class MainActivity : Activity() {
 
         return buildString {
             append(if (connected) "Cloud backup file connected." else "No cloud backup file connected.")
-            append("\nSmart sync on resume: ")
-            append(if (isCloudAutoSyncEnabled()) "On" else "Off")
+            append("\nSmart sync: ")
+            append(
+                if (isCloudAutoSyncEnabled()) {
+                    "On • every " + loadCloudAutoSyncMinutes() + " min while app is open"
+                } else {
+                    "Off"
+                }
+            )
             if (lastSync > 0L) {
                 append("\nLast sync: ")
                 append(formatDate(lastSync))
@@ -3516,6 +3572,7 @@ class MainActivity : Activity() {
                 "Sync Now",
                 "Load from Cloud",
                 if (isCloudAutoSyncEnabled()) "Turn Smart Sync Off" else "Turn Smart Sync On",
+                "Smart Sync Interval",
                 "Choose Different Cloud File",
                 "Disconnect Cloud File"
             )
@@ -3544,8 +3601,9 @@ class MainActivity : Activity() {
                                 Toast.LENGTH_SHORT
                             ).show()
                         }
-                        4 -> connectExistingCloudBackup()
-                        5 -> {
+                        4 -> showCloudSyncIntervalDialog()
+                        5 -> connectExistingCloudBackup()
+                        6 -> {
                             getSharedPreferences(prefsName, MODE_PRIVATE)
                                 .edit()
                                 .remove(cloudBackupUriKey)
@@ -3553,6 +3611,7 @@ class MainActivity : Activity() {
                                 .remove(cloudSharedFingerprintKey)
                                 .remove(cloudLastAutoCheckKey)
                                 .apply()
+                            stopSmartCloudSync()
                             Toast.makeText(this, "Cloud backup disconnected.", Toast.LENGTH_SHORT).show()
                         }
                     }
@@ -3564,6 +3623,29 @@ class MainActivity : Activity() {
                 }
             }
             .setNegativeButton("Close", null)
+            .show()
+    }
+
+    private fun showCloudSyncIntervalDialog() {
+        val values = intArrayOf(5, 15, 30, 60)
+        val labels = values.map { "$it minutes" }.toTypedArray()
+        val current = values.indexOf(loadCloudAutoSyncMinutes()).coerceAtLeast(0)
+
+        AlertDialog.Builder(this)
+            .setTitle("Smart Sync Interval")
+            .setSingleChoiceItems(labels, current) { dialog, which ->
+                setCloudAutoSyncMinutes(values[which])
+                dialog.dismiss()
+                Toast.makeText(
+                    this,
+                    "Smart sync set to every " + values[which] + " minutes.",
+                    Toast.LENGTH_SHORT
+                ).show()
+                if (onPortfolioScreen) {
+                    showPortfolioScreen()
+                }
+            }
+            .setNegativeButton("Cancel", null)
             .show()
     }
 
@@ -3644,7 +3726,9 @@ class MainActivity : Activity() {
 
         val digest = MessageDigest.getInstance("SHA-256")
             .digest(payload.toByteArray(Charsets.UTF_8))
-        return digest.joinToString("") { byte -> "%02x".format(byte) }
+        return digest.joinToString("") { byte ->
+            "%02x".format(byte.toInt() and 0xff)
+        }
     }
 
     private fun saveCloudBaseline(portfolio: JSONObject) {
@@ -3740,7 +3824,7 @@ class MainActivity : Activity() {
         )
     }
 
-    private fun smartCloudSyncOnResume() {
+    private fun smartCloudSyncCheck() {
         if (!isCloudAutoSyncEnabled()) {
             return
         }
@@ -3749,7 +3833,11 @@ class MainActivity : Activity() {
         val prefs = getSharedPreferences(prefsName, MODE_PRIVATE)
         val now = System.currentTimeMillis()
         val lastCheck = prefs.getLong(cloudLastAutoCheckKey, 0L)
-        if (now - lastCheck < 60_000L) {
+        val minCheckGap = kotlin.math.min(
+            loadCloudAutoSyncMinutes() * 60_000L,
+            30_000L
+        )
+        if (now - lastCheck < minCheckGap) {
             return
         }
         prefs.edit().putLong(cloudLastAutoCheckKey, now).apply()
@@ -4264,6 +4352,7 @@ class MainActivity : Activity() {
                     saveCloudBaseline(document.getJSONObject("sharedPortfolio"))
                     markCloudSync()
                     Toast.makeText(this, "Cloud backup connected and saved.", Toast.LENGTH_SHORT).show()
+                    scheduleSmartCloudSync()
                     if (onPortfolioScreen) {
                         showPortfolioScreen()
                     }
