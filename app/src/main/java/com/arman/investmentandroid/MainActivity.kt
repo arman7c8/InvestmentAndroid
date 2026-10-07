@@ -86,8 +86,12 @@ class MainActivity : Activity() {
     private val undoStackKey = "undo_stack_json"
     private val redoStackKey = "redo_stack_json"
     private val appLockHashKey = "app_lock_hash"
+    private val cloudBackupUriKey = "cloud_backup_uri"
+    private val cloudLastSyncKey = "cloud_last_sync"
     private val exportBackupRequestCode = 1001
     private val importBackupRequestCode = 1002
+    private val createCloudBackupRequestCode = 1003
+    private val connectCloudBackupRequestCode = 1004
     private val coreCategories = listOf("Cash", "Gold", "Stocks", "Crypto", "Fund", "Other")
     private val priceSources = listOf("Manual", "Nobitex")
     private val displayUnits = listOf("Toman", "kT", "MT", "Rial")
@@ -1054,7 +1058,7 @@ class MainActivity : Activity() {
         }
 
         val subtitle = TextView(this).apply {
-            text = "Your portfolio, one step closer to mobile.\nv0.14.0"
+            text = "Your portfolio, one step closer to mobile.\nv0.15.0"
             textSize = 17f
             gravity = Gravity.CENTER
             setTextColor(Color.DKGRAY)
@@ -1619,6 +1623,7 @@ class MainActivity : Activity() {
     private fun showToolsDialog() {
         val options = arrayOf(
             "AI Portfolio Summary",
+            "Google Drive / Cloud Backup",
             "Edit Targets",
             "Rebalance Tolerance",
             "Portfolio History",
@@ -1634,14 +1639,15 @@ class MainActivity : Activity() {
             .setItems(options) { _, which ->
                 when (which) {
                     0 -> sharePrivacySafeAiSummary()
-                    1 -> showTargetsDialog()
-                    2 -> showToleranceDialog()
-                    3 -> showHistoryDialog()
-                    4 -> showCategoryManagerDialog()
-                    5 -> showAppLockDialog()
-                    6 -> showSettingsDialog()
-                    7 -> showBackupDialog()
-                    8 -> showResetDemoDialog()
+                    1 -> showCloudBackupDialog()
+                    2 -> showTargetsDialog()
+                    3 -> showToleranceDialog()
+                    4 -> showHistoryDialog()
+                    5 -> showCategoryManagerDialog()
+                    6 -> showAppLockDialog()
+                    7 -> showSettingsDialog()
+                    8 -> showBackupDialog()
+                    9 -> showResetDemoDialog()
                 }
             }
             .setNegativeButton("Close", null)
@@ -3324,6 +3330,201 @@ class MainActivity : Activity() {
             .show()
     }
 
+    private fun loadCloudBackupUri(): android.net.Uri? {
+        val raw = getSharedPreferences(prefsName, MODE_PRIVATE)
+            .getString(cloudBackupUriKey, null)
+            ?: return null
+
+        return try {
+            android.net.Uri.parse(raw)
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    private fun saveCloudBackupUri(uri: android.net.Uri) {
+        getSharedPreferences(prefsName, MODE_PRIVATE)
+            .edit()
+            .putString(cloudBackupUriKey, uri.toString())
+            .apply()
+    }
+
+    private fun markCloudSync() {
+        getSharedPreferences(prefsName, MODE_PRIVATE)
+            .edit()
+            .putLong(cloudLastSyncKey, System.currentTimeMillis())
+            .apply()
+    }
+
+    private fun cloudStatusText(): String {
+        val prefs = getSharedPreferences(prefsName, MODE_PRIVATE)
+        val connected = loadCloudBackupUri() != null
+        val lastSync = prefs.getLong(cloudLastSyncKey, 0L)
+
+        return buildString {
+            append(if (connected) "Cloud backup file connected." else "No cloud backup file connected.")
+            if (lastSync > 0L) {
+                append("\nLast sync: ")
+                append(formatDate(lastSync))
+            }
+            append("\n\nTip: in the Android file picker, choose Google Drive to keep the backup in Drive.")
+        }
+    }
+
+    private fun showCloudBackupDialog() {
+        val connected = loadCloudBackupUri() != null
+        val options = if (connected) {
+            arrayOf(
+                "Sync Now (upload this phone)",
+                "Load from Cloud",
+                "Choose Different Cloud File",
+                "Disconnect Cloud File"
+            )
+        } else {
+            arrayOf(
+                "Create Cloud Backup File",
+                "Connect Existing Backup File"
+            )
+        }
+
+        AlertDialog.Builder(this)
+            .setTitle("Google Drive / Cloud Backup")
+            .setMessage(cloudStatusText())
+            .setItems(options) { _, which ->
+                if (connected) {
+                    when (which) {
+                        0 -> syncToCloud()
+                        1 -> confirmLoadFromCloud()
+                        2 -> connectExistingCloudBackup()
+                        3 -> {
+                            getSharedPreferences(prefsName, MODE_PRIVATE)
+                                .edit()
+                                .remove(cloudBackupUriKey)
+                                .remove(cloudLastSyncKey)
+                                .apply()
+                            Toast.makeText(this, "Cloud backup disconnected.", Toast.LENGTH_SHORT).show()
+                        }
+                    }
+                } else {
+                    when (which) {
+                        0 -> createCloudBackupFile()
+                        1 -> connectExistingCloudBackup()
+                    }
+                }
+            }
+            .setNegativeButton("Close", null)
+            .show()
+    }
+
+    private fun createCloudBackupFile() {
+        val intent = Intent(Intent.ACTION_CREATE_DOCUMENT).apply {
+            addCategory(Intent.CATEGORY_OPENABLE)
+            type = "application/json"
+            putExtra(Intent.EXTRA_TITLE, "InvestmentAndroid-cloud-backup.json")
+            addFlags(
+                Intent.FLAG_GRANT_READ_URI_PERMISSION or
+                    Intent.FLAG_GRANT_WRITE_URI_PERMISSION or
+                    Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION
+            )
+        }
+        startActivityForResult(intent, createCloudBackupRequestCode)
+    }
+
+    private fun connectExistingCloudBackup() {
+        val intent = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
+            addCategory(Intent.CATEGORY_OPENABLE)
+            type = "application/json"
+            addFlags(
+                Intent.FLAG_GRANT_READ_URI_PERMISSION or
+                    Intent.FLAG_GRANT_WRITE_URI_PERMISSION or
+                    Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION
+            )
+        }
+        startActivityForResult(intent, connectCloudBackupRequestCode)
+    }
+
+    private fun takePersistentCloudPermission(uri: android.net.Uri, data: Intent?) {
+        val requestedFlags = data?.flags ?: 0
+        val persistableFlags = requestedFlags and
+            (Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION)
+
+        if (persistableFlags != 0) {
+            try {
+                contentResolver.takePersistableUriPermission(uri, persistableFlags)
+            } catch (_: SecurityException) {
+                // Some document providers grant session access without persistable permission.
+            }
+        }
+    }
+
+    private fun syncToCloud() {
+        val uri = loadCloudBackupUri()
+        if (uri == null) {
+            showCloudBackupDialog()
+            return
+        }
+
+        try {
+            val stream = contentResolver.openOutputStream(uri, "wt")
+                ?: throw IllegalStateException("Could not open the cloud backup file for writing.")
+
+            stream.bufferedWriter().use { writer ->
+                writer.write(createBackupJson())
+            }
+
+            markCloudSync()
+            Toast.makeText(this, "Cloud backup updated.", Toast.LENGTH_SHORT).show()
+        } catch (error: Exception) {
+            AlertDialog.Builder(this)
+                .setTitle("Cloud Sync Failed")
+                .setMessage(
+                    (error.message ?: "Could not write the backup file.") +
+                        "\n\nIf access expired, choose the cloud file again."
+                )
+                .setPositiveButton("OK", null)
+                .show()
+        }
+    }
+
+    private fun confirmLoadFromCloud() {
+        AlertDialog.Builder(this)
+            .setTitle("Load from Cloud?")
+            .setMessage(
+                "This will replace the current portfolio with the connected cloud backup. " +
+                    "An Undo checkpoint will be created first."
+            )
+            .setNegativeButton("Cancel", null)
+            .setPositiveButton("Load") { _, _ -> loadFromCloud() }
+            .show()
+    }
+
+    private fun loadFromCloud() {
+        val uri = loadCloudBackupUri()
+        if (uri == null) {
+            showCloudBackupDialog()
+            return
+        }
+
+        try {
+            val raw = contentResolver.openInputStream(uri)?.bufferedReader()?.use { it.readText() }
+                ?: throw IllegalStateException("Could not read the cloud backup file.")
+
+            restoreBackupJson(raw)
+            markCloudSync()
+            Toast.makeText(this, "Cloud backup loaded.", Toast.LENGTH_SHORT).show()
+            showPortfolioScreen()
+        } catch (error: Exception) {
+            AlertDialog.Builder(this)
+                .setTitle("Cloud Load Failed")
+                .setMessage(
+                    (error.message ?: "Could not read the backup file.") +
+                        "\n\nIf access expired, choose the cloud file again."
+                )
+                .setPositiveButton("OK", null)
+                .show()
+        }
+    }
+
     private fun showBackupDialog() {
         AlertDialog.Builder(this)
             .setTitle("Backup / Restore")
@@ -3359,7 +3560,7 @@ class MainActivity : Activity() {
         val prefs = getSharedPreferences(prefsName, MODE_PRIVATE)
 
         return JSONObject().apply {
-            put("formatVersion", 2)
+            put("formatVersion", 3)
             put("createdAt", System.currentTimeMillis())
             put("assets", JSONArray(prefs.getString(assetsKey, "[]") ?: "[]"))
             put("transactions", JSONArray(prefs.getString(transactionsKey, "[]") ?: "[]"))
@@ -3425,6 +3626,38 @@ class MainActivity : Activity() {
                     restoreBackupJson(raw)
                     Toast.makeText(this, "Backup restored.", Toast.LENGTH_SHORT).show()
                     showPortfolioScreen()
+                }
+
+                createCloudBackupRequestCode -> {
+                    takePersistentCloudPermission(uri, data)
+                    saveCloudBackupUri(uri)
+                    val stream = contentResolver.openOutputStream(uri, "wt")
+                        ?: throw IllegalStateException("Could not create cloud backup file.")
+                    stream.bufferedWriter().use { writer ->
+                        writer.write(createBackupJson())
+                    }
+                    markCloudSync()
+                    Toast.makeText(this, "Cloud backup connected and saved.", Toast.LENGTH_SHORT).show()
+                }
+
+                connectCloudBackupRequestCode -> {
+                    takePersistentCloudPermission(uri, data)
+                    val raw = contentResolver.openInputStream(uri)?.bufferedReader()?.use { it.readText() }
+                        ?: throw IllegalArgumentException("Could not read selected backup file.")
+
+                    JSONObject(raw).getJSONArray("assets")
+                    saveCloudBackupUri(uri)
+
+                    AlertDialog.Builder(this)
+                        .setTitle("Cloud Backup Connected")
+                        .setMessage("The file is connected. Load its data now or keep this phone's data?")
+                        .setNegativeButton("Keep Phone Data") { _, _ ->
+                            syncToCloud()
+                        }
+                        .setPositiveButton("Load Cloud Data") { _, _ ->
+                            loadFromCloud()
+                        }
+                        .show()
                 }
             }
         } catch (error: Exception) {
