@@ -775,7 +775,9 @@ class MainActivity : Activity() {
     private fun hashPin(pin: String): String {
         val digest = MessageDigest.getInstance("SHA-256")
             .digest(pin.toByteArray(Charsets.UTF_8))
-        return digest.joinToString("") { byte -> "%02x".format(byte) }
+        return digest.joinToString("") { byte ->
+            "%02x".format(byte.toInt() and 0xff)
+        }
     }
 
     private fun isAppLockEnabled(): Boolean {
@@ -1059,7 +1061,7 @@ class MainActivity : Activity() {
         }
 
         val subtitle = TextView(this).apply {
-            text = "Your portfolio, one step closer to mobile.\nv0.18.0"
+            text = "Your portfolio, one step closer to mobile.\nv0.19.0"
             textSize = 17f
             gravity = Gravity.CENTER
             setTextColor(Color.DKGRAY)
@@ -1131,6 +1133,7 @@ class MainActivity : Activity() {
             snapshotChange = snapshotChange
         )
 
+        addCloudSyncCard(container)
         addCategorySummary(container, assets, totalValue)
         addPeriodSummary(container, loadSummaryPeriod())
 
@@ -1339,7 +1342,7 @@ class MainActivity : Activity() {
         container.addView(backButton, buttonParams)
         container.addView(
             TextView(this).apply {
-                text = "Investment Android • v0.13.0"
+                text = "Investment Android • v0.19.0"
                 textSize = 12f
                 gravity = Gravity.CENTER
                 setTextColor(Color.GRAY)
@@ -1350,6 +1353,118 @@ class MainActivity : Activity() {
         setContentView(
             ScrollView(this).apply {
                 addView(container)
+            }
+        )
+    }
+
+    private fun localCloudSyncState(): String {
+        val uri = loadCloudBackupUri()
+            ?: return "Not connected"
+
+        val prefs = getSharedPreferences(prefsName, MODE_PRIVATE)
+        val baseline = prefs.getString(cloudSharedFingerprintKey, null)
+        if (baseline.isNullOrBlank()) {
+            return "Connected • first sync pending"
+        }
+
+        return try {
+            val current = sharedFingerprint(buildSharedPortfolio())
+            if (current == baseline) {
+                "Synced"
+            } else {
+                "Local changes pending sync"
+            }
+        } catch (_: Exception) {
+            "Connected"
+        }
+    }
+
+    private fun addCloudSyncCard(parent: LinearLayout) {
+        val connected = loadCloudBackupUri() != null
+        val lastSync = getSharedPreferences(prefsName, MODE_PRIVATE)
+            .getLong(cloudLastSyncKey, 0L)
+
+        val card = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(16), dp(13), dp(16), dp(13))
+            background = GradientDrawable().apply {
+                setColor(Color.WHITE)
+                cornerRadius = dp(14).toFloat()
+                setStroke(dp(1), Color.rgb(225, 225, 225))
+            }
+        }
+
+        val headerRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+        }
+
+        val textBlock = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+        }
+
+        textBlock.addView(
+            TextView(this).apply {
+                text = "Cloud Sync"
+                textSize = 15f
+                setTypeface(typeface, Typeface.BOLD)
+                setTextColor(Color.rgb(35, 35, 35))
+            }
+        )
+
+        textBlock.addView(
+            TextView(this).apply {
+                text = buildString {
+                    append(localCloudSyncState())
+                    if (lastSync > 0L) {
+                        append(" • ")
+                        append(formatDate(lastSync))
+                    }
+                }
+                textSize = 12f
+                setTextColor(
+                    when (localCloudSyncState()) {
+                        "Synced" -> Color.rgb(25, 125, 70)
+                        "Local changes pending sync" -> Color.rgb(185, 110, 25)
+                        else -> Color.GRAY
+                    }
+                )
+            }
+        )
+
+        headerRow.addView(
+            textBlock,
+            LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+        )
+
+        headerRow.addView(
+            Button(this).apply {
+                text = if (connected) "Sync Now" else "Connect"
+                isAllCaps = false
+                textSize = 13f
+                setOnClickListener {
+                    if (connected) {
+                        syncToCloud()
+                    } else {
+                        showCloudBackupDialog()
+                    }
+                }
+            },
+            LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            )
+        )
+
+        card.addView(headerRow)
+        parent.addView(
+            card,
+            LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            ).apply {
+                topMargin = dp(4)
+                bottomMargin = dp(8)
             }
         )
     }
@@ -3598,6 +3713,9 @@ class MainActivity : Activity() {
             saveCloudBaseline(document.getJSONObject("sharedPortfolio"))
             markCloudSync()
             Toast.makeText(this, "Cloud backup updated safely.", Toast.LENGTH_SHORT).show()
+            if (onPortfolioScreen) {
+                showPortfolioScreen()
+            }
         } catch (error: Exception) {
             AlertDialog.Builder(this)
                 .setTitle("Cloud Sync Failed")
@@ -3924,6 +4042,9 @@ class MainActivity : Activity() {
                     saveCloudBaseline(document.getJSONObject("sharedPortfolio"))
                     markCloudSync()
                     Toast.makeText(this, "Cloud backup connected and saved.", Toast.LENGTH_SHORT).show()
+                    if (onPortfolioScreen) {
+                        showPortfolioScreen()
+                    }
                 }
 
                 connectCloudBackupRequestCode -> {
