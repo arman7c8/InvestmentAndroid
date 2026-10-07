@@ -1105,7 +1105,7 @@ class MainActivity : Activity() {
         }
 
         val subtitle = TextView(this).apply {
-            text = "Your portfolio, one step closer to mobile.\nv0.29.0"
+            text = "Your portfolio, one step closer to mobile.\nv0.30.0"
             textSize = 17f
             gravity = Gravity.CENTER
             setTextColor(Color.DKGRAY)
@@ -1386,7 +1386,7 @@ class MainActivity : Activity() {
         container.addView(backButton, buttonParams)
         container.addView(
             TextView(this).apply {
-                text = "Investment Android • v0.29.0"
+                text = "Investment Android • v0.30.0"
                 textSize = 12f
                 gravity = Gravity.CENTER
                 setTextColor(Color.GRAY)
@@ -3965,6 +3965,20 @@ class MainActivity : Activity() {
         }
     }
 
+    private fun showCloudAccessError(title: String, message: String) {
+        AlertDialog.Builder(this)
+            .setTitle(title)
+            .setMessage(
+                message +
+                    "\n\nIf the Google Drive file was moved, removed, or access expired, reconnect it."
+            )
+            .setNegativeButton("Close", null)
+            .setPositiveButton("Reconnect") { _, _ ->
+                connectExistingCloudBackup()
+            }
+            .show()
+    }
+
     private fun checkCloudStatus() {
         val uri = loadCloudBackupUri()
         if (uri == null) {
@@ -4022,14 +4036,10 @@ class MainActivity : Activity() {
                 .setPositiveButton("Sync Now") { _, _ -> syncToCloud() }
                 .show()
         } catch (error: Exception) {
-            AlertDialog.Builder(this)
-                .setTitle("Cloud Status Failed")
-                .setMessage(
-                    (error.message ?: "Could not check the cloud file.") +
-                        "\n\nIf access expired, choose the cloud file again."
-                )
-                .setPositiveButton("OK", null)
-                .show()
+            showCloudAccessError(
+                "Cloud Status Failed",
+                error.message ?: "Could not check the cloud file."
+            )
         }
     }
 
@@ -4124,14 +4134,10 @@ class MainActivity : Activity() {
                 showPortfolioScreen()
             }
         } catch (error: Exception) {
-            AlertDialog.Builder(this)
-                .setTitle("Cloud Sync Failed")
-                .setMessage(
-                    (error.message ?: "Could not write the backup file.") +
-                        "\n\nIf access expired, choose the cloud file again."
-                )
-                .setPositiveButton("OK", null)
-                .show()
+            showCloudAccessError(
+                "Cloud Sync Failed",
+                error.message ?: "Could not write the backup file."
+            )
         }
     }
 
@@ -4167,14 +4173,10 @@ class MainActivity : Activity() {
             Toast.makeText(this, "Cloud backup loaded.", Toast.LENGTH_SHORT).show()
             showPortfolioScreen()
         } catch (error: Exception) {
-            AlertDialog.Builder(this)
-                .setTitle("Cloud Load Failed")
-                .setMessage(
-                    (error.message ?: "Could not read the backup file.") +
-                        "\n\nIf access expired, choose the cloud file again."
-                )
-                .setPositiveButton("OK", null)
-                .show()
+            showCloudAccessError(
+                "Cloud Load Failed",
+                error.message ?: "Could not read the backup file."
+            )
         }
     }
 
