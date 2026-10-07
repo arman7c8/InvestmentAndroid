@@ -722,7 +722,6 @@ class MainActivity : Activity() {
             .putString(displayUnitKey, displayUnit)
             .putString(summaryPeriodKey, summaryPeriod)
             .putInt(autoRefreshMinutesKey, autoRefreshMinutes)
-            .putString(categoriesKey, categories.toString())
             .apply()
     }
 
@@ -2866,6 +2865,7 @@ class MainActivity : Activity() {
             .putString(displayUnitKey, displayUnit)
             .putString(summaryPeriodKey, summaryPeriod)
             .putInt(autoRefreshMinutesKey, autoRefreshMinutes)
+            .putString(categoriesKey, categories.toString())
             .apply()
 
         scheduleAutoRefresh()
