@@ -29,6 +29,7 @@ import java.text.NumberFormat
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import java.util.UUID
 
 class MainActivity : Activity() {
 
@@ -54,12 +55,16 @@ class MainActivity : Activity() {
     }
 
     data class Transaction(
+        val id: String,
         val type: String,
         val assetName: String,
         val quantity: Double,
         val price: Double,
         val realizedProfit: Double,
-        val timestamp: Long
+        val timestamp: Long,
+        val beforeAssetJson: String?,
+        val afterAssetJson: String?,
+        val managed: Boolean
     )
 
     data class Snapshot(
@@ -425,26 +430,113 @@ class MainActivity : Activity() {
             .apply()
     }
 
+    private fun assetToJson(asset: Asset): String {
+        return JSONObject().apply {
+            put("name", asset.name)
+            put("category", asset.category)
+            put("quantity", asset.quantity)
+            put("price", asset.price)
+            put("averageCost", asset.averageCost)
+            put("targetPercent", asset.targetPercent)
+            put("includeInTarget", asset.includeInTarget)
+            put("priceSource", asset.priceSource)
+            put("symbol", asset.symbol)
+        }.toString()
+    }
+
+    private fun assetFromJson(raw: String?): Asset? {
+        if (raw.isNullOrBlank()) {
+            return null
+        }
+
+        return try {
+            val item = JSONObject(raw)
+            Asset(
+                name = item.getString("name"),
+                category = item.optString("category", "Other"),
+                quantity = item.optDouble("quantity", 0.0),
+                price = item.optDouble("price", 0.0),
+                averageCost = item.optDouble("averageCost", 0.0),
+                targetPercent = item.optDouble("targetPercent", 0.0),
+                includeInTarget = item.optBoolean("includeInTarget", true),
+                priceSource = item.optString("priceSource", "Manual"),
+                symbol = item.optString("symbol", "")
+            )
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    private fun assetsEquivalent(left: Asset, right: Asset): Boolean {
+        fun close(a: Double, b: Double): Boolean =
+            kotlin.math.abs(a - b) <= kotlin.math.max(0.000001, kotlin.math.abs(b) * 0.0000001)
+
+        return left.name == right.name &&
+            left.category == right.category &&
+            close(left.quantity, right.quantity) &&
+            close(left.price, right.price) &&
+            close(left.averageCost, right.averageCost) &&
+            close(left.targetPercent, right.targetPercent) &&
+            left.includeInTarget == right.includeInTarget &&
+            left.priceSource == right.priceSource &&
+            left.symbol == right.symbol
+    }
+
     private fun loadTransactions(): MutableList<Transaction> {
         val raw = getSharedPreferences(prefsName, MODE_PRIVATE)
             .getString(transactionsKey, "[]") ?: "[]"
 
-        return try {
+        val transactions = mutableListOf<Transaction>()
+        var migrated = false
+
+        try {
             val array = JSONArray(raw)
-            MutableList(array.length()) { index ->
+            for (index in 0 until array.length()) {
                 val item = array.getJSONObject(index)
-                Transaction(
-                    type = item.optString("type", "BUY"),
-                    assetName = item.optString("assetName", "Asset"),
-                    quantity = item.optDouble("quantity", 0.0),
-                    price = item.optDouble("price", 0.0),
-                    realizedProfit = item.optDouble("realizedProfit", 0.0),
-                    timestamp = item.optLong("timestamp", System.currentTimeMillis())
+                val timestamp = item.optLong("timestamp", System.currentTimeMillis())
+                val id = if (item.has("id")) {
+                    item.optString("id")
+                } else {
+                    migrated = true
+                    "legacy-" + timestamp + "-" + index
+                }
+
+                transactions.add(
+                    Transaction(
+                        id = id,
+                        type = item.optString("type", "BUY"),
+                        assetName = item.optString("assetName", "Asset"),
+                        quantity = item.optDouble("quantity", 0.0),
+                        price = item.optDouble("price", 0.0),
+                        realizedProfit = item.optDouble("realizedProfit", 0.0),
+                        timestamp = timestamp,
+                        beforeAssetJson = if (item.has("beforeAssetJson") && !item.isNull("beforeAssetJson")) {
+                            item.optString("beforeAssetJson")
+                        } else {
+                            null
+                        },
+                        afterAssetJson = if (item.has("afterAssetJson") && !item.isNull("afterAssetJson")) {
+                            item.optString("afterAssetJson")
+                        } else {
+                            null
+                        },
+                        managed = item.optBoolean("managed", false)
+                    )
                 )
+
+                if (!item.has("managed")) {
+                    migrated = true
+                }
             }
         } catch (_: Exception) {
-            mutableListOf()
+            return mutableListOf()
         }
+
+        if (migrated) {
+            saveTransactions(transactions)
+        }
+
+        return transactions
     }
 
     private fun saveTransactions(transactions: List<Transaction>) {
@@ -454,12 +546,24 @@ class MainActivity : Activity() {
         trimmed.forEach { transaction ->
             array.put(
                 JSONObject().apply {
+                    put("id", transaction.id)
                     put("type", transaction.type)
                     put("assetName", transaction.assetName)
                     put("quantity", transaction.quantity)
                     put("price", transaction.price)
                     put("realizedProfit", transaction.realizedProfit)
                     put("timestamp", transaction.timestamp)
+                    if (transaction.beforeAssetJson == null) {
+                        put("beforeAssetJson", JSONObject.NULL)
+                    } else {
+                        put("beforeAssetJson", transaction.beforeAssetJson)
+                    }
+                    if (transaction.afterAssetJson == null) {
+                        put("afterAssetJson", JSONObject.NULL)
+                    } else {
+                        put("afterAssetJson", transaction.afterAssetJson)
+                    }
+                    put("managed", transaction.managed)
                 }
             )
         }
@@ -2006,43 +2110,53 @@ class MainActivity : Activity() {
                                 ((current.quantity * current.averageCost) + (quantity * transactionPrice)) /
                                     newQuantity
 
-                            assets[index] = current.copy(
+                            val updatedAsset = current.copy(
                                 quantity = newQuantity,
                                 price = transactionPrice,
                                 averageCost = newAverageCost
                             )
+                            assets[index] = updatedAsset
 
                             transactions.add(
                                 Transaction(
+                                    id = UUID.randomUUID().toString(),
                                     type = "BUY",
                                     assetName = current.name,
                                     quantity = quantity,
                                     price = transactionPrice,
                                     realizedProfit = 0.0,
-                                    timestamp = System.currentTimeMillis()
+                                    timestamp = System.currentTimeMillis(),
+                                    beforeAssetJson = assetToJson(current),
+                                    afterAssetJson = assetToJson(updatedAsset),
+                                    managed = true
                                 )
                             )
                         } else {
                             val realizedProfit = (transactionPrice - current.averageCost) * quantity
                             val newQuantity = current.quantity - quantity
 
-                            if (newQuantity <= 0.0000001) {
+                            val updatedAsset = if (newQuantity <= 0.0000001) {
                                 assets.removeAt(index)
+                                null
                             } else {
-                                assets[index] = current.copy(
+                                current.copy(
                                     quantity = newQuantity,
                                     price = transactionPrice
-                                )
+                                ).also { assets[index] = it }
                             }
 
                             transactions.add(
                                 Transaction(
+                                    id = UUID.randomUUID().toString(),
                                     type = "SELL",
                                     assetName = current.name,
                                     quantity = quantity,
                                     price = transactionPrice,
                                     realizedProfit = realizedProfit,
-                                    timestamp = System.currentTimeMillis()
+                                    timestamp = System.currentTimeMillis(),
+                                    beforeAssetJson = assetToJson(current),
+                                    afterAssetJson = updatedAsset?.let { assetToJson(it) },
+                                    managed = true
                                 )
                             )
                         }
@@ -2406,23 +2520,28 @@ class MainActivity : Activity() {
                     averageCost = finalBalance
                 )
 
+                val transactions = loadTransactions()
                 if (kotlin.math.abs(difference) > 0.01) {
-                    val transactions = loadTransactions()
+                    val updatedAsset = assets[index]
                     transactions.add(
                         Transaction(
+                            id = UUID.randomUUID().toString(),
                             type = if (difference > 0.0) "INCOME" else "EXPENSE",
                             assetName = current.name,
                             quantity = 1.0,
                             price = kotlin.math.abs(difference),
                             realizedProfit = 0.0,
-                            timestamp = System.currentTimeMillis()
+                            timestamp = System.currentTimeMillis(),
+                            beforeAssetJson = assetToJson(current),
+                            afterAssetJson = assetToJson(updatedAsset),
+                            managed = true
                         )
                     )
-                    saveTransactions(transactions)
                 }
 
                 pushUndoCheckpoint()
                 saveAssets(assets)
+                saveTransactions(transactions)
                 recordSnapshot(assets)
                 dialog.dismiss()
                 showPortfolioScreen()
@@ -2432,16 +2551,181 @@ class MainActivity : Activity() {
         dialog.show()
     }
 
+    private fun transactionDetails(transaction: Transaction): String {
+        return buildString {
+            append(transaction.type)
+            append(" • ")
+            append(transaction.assetName)
+            if (transaction.type == "INCOME" || transaction.type == "EXPENSE") {
+                append("\nAmount: ")
+                append(formatToman(transaction.price))
+            } else {
+                append("\nQuantity: ")
+                append(formatQuantity(transaction.quantity))
+                append("\nPrice: ")
+                append(formatToman(transaction.price))
+            }
+            if (transaction.type == "SELL") {
+                append("\nRealized P/L: ")
+                append(formatSignedToman(transaction.realizedProfit))
+            }
+            append("\n")
+            append(formatDate(transaction.timestamp))
+            if (!transaction.managed) {
+                append("\nLegacy activity: portfolio-safe revert unavailable")
+            }
+        }
+    }
+
+    private fun isLatestManagedTransactionForAsset(
+        transaction: Transaction,
+        allTransactions: List<Transaction>
+    ): Boolean {
+        return allTransactions
+            .filter { it.managed && it.assetName == transaction.assetName }
+            .maxByOrNull { it.timestamp }
+            ?.id == transaction.id
+    }
+
+    private fun canSafelyRevertTransaction(
+        transaction: Transaction,
+        allTransactions: List<Transaction>,
+        assets: List<Asset>
+    ): Boolean {
+        if (!transaction.managed || !isLatestManagedTransactionForAsset(transaction, allTransactions)) {
+            return false
+        }
+
+        val expectedAfter = assetFromJson(transaction.afterAssetJson)
+        val current = assets.firstOrNull { it.name == transaction.assetName }
+
+        return if (expectedAfter == null) {
+            current == null
+        } else {
+            current != null && assetsEquivalent(current, expectedAfter)
+        }
+    }
+
+    private fun revertTransaction(transactionId: String) {
+        val transactions = loadTransactions()
+        val transaction = transactions.firstOrNull { it.id == transactionId } ?: return
+        val assets = loadAssets()
+
+        if (!canSafelyRevertTransaction(transaction, transactions, assets)) {
+            AlertDialog.Builder(this)
+                .setTitle("Cannot Safely Revert")
+                .setMessage(
+                    "This transaction is not the latest managed change for the asset, " +
+                        "or the asset has changed since it was recorded."
+                )
+                .setPositiveButton("OK", null)
+                .show()
+            return
+        }
+
+        val before = assetFromJson(transaction.beforeAssetJson)
+        val currentIndex = assets.indexOfFirst { it.name == transaction.assetName }
+
+        pushUndoCheckpoint()
+
+        if (currentIndex >= 0) {
+            assets.removeAt(currentIndex)
+        }
+
+        if (before != null) {
+            assets.add(before)
+        }
+
+        transactions.removeAll { it.id == transactionId }
+        saveAssets(assets)
+        saveTransactions(transactions)
+        recordSnapshot(assets)
+        showPortfolioScreen()
+        Toast.makeText(this, "Transaction reverted.", Toast.LENGTH_SHORT).show()
+    }
+
     private fun showActivityDialog() {
+        val transactions = loadTransactions()
+        val assets = loadAssets()
         val content = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(16), dp(8), dp(16), dp(8))
         }
 
-        addRecentActivity(content)
+        if (transactions.isEmpty()) {
+            content.addView(
+                TextView(this).apply {
+                    text = "No activity yet."
+                    textSize = 14f
+                    setTextColor(Color.GRAY)
+                }
+            )
+        } else {
+            transactions
+                .sortedByDescending { it.timestamp }
+                .forEach { transaction ->
+                    val card = LinearLayout(this).apply {
+                        orientation = LinearLayout.VERTICAL
+                        setPadding(dp(12), dp(10), dp(12), dp(10))
+                        background = GradientDrawable().apply {
+                            setColor(Color.WHITE)
+                            cornerRadius = dp(10).toFloat()
+                            setStroke(dp(1), Color.rgb(230, 230, 230))
+                        }
+                    }
+
+                    card.addView(
+                        TextView(this).apply {
+                            text = transactionDetails(transaction)
+                            textSize = 13f
+                            setTextColor(Color.DKGRAY)
+                        }
+                    )
+
+                    val canRevert = canSafelyRevertTransaction(transaction, transactions, assets)
+                    val revertButton = Button(this).apply {
+                        text = if (canRevert) "Revert Transaction" else "Revert Unavailable"
+                        isAllCaps = false
+                        isEnabled = canRevert
+                        setOnClickListener {
+                            AlertDialog.Builder(this@MainActivity)
+                                .setTitle("Revert transaction?")
+                                .setMessage(
+                                    "This will reverse the portfolio effect of this transaction " +
+                                        "and remove it from Activity."
+                                )
+                                .setNegativeButton("Cancel", null)
+                                .setPositiveButton("Revert") { _, _ ->
+                                    revertTransaction(transaction.id)
+                                }
+                                .show()
+                        }
+                    }
+
+                    card.addView(
+                        revertButton,
+                        LinearLayout.LayoutParams(
+                            ViewGroup.LayoutParams.MATCH_PARENT,
+                            ViewGroup.LayoutParams.WRAP_CONTENT
+                        ).apply {
+                            topMargin = dp(8)
+                        }
+                    )
+
+                    content.addView(
+                        card,
+                        LinearLayout.LayoutParams(
+                            ViewGroup.LayoutParams.MATCH_PARENT,
+                            ViewGroup.LayoutParams.WRAP_CONTENT
+                        ).apply {
+                            bottomMargin = dp(8)
+                        }
+                    )
+                }
+        }
 
         AlertDialog.Builder(this)
-            .setTitle("Activity")
+            .setTitle("Activity Manager")
             .setView(
                 ScrollView(this).apply {
                     addView(content)
@@ -2547,7 +2831,7 @@ class MainActivity : Activity() {
         val prefs = getSharedPreferences(prefsName, MODE_PRIVATE)
 
         return JSONObject().apply {
-            put("formatVersion", 1)
+            put("formatVersion", 2)
             put("createdAt", System.currentTimeMillis())
             put("assets", JSONArray(prefs.getString(assetsKey, "[]") ?: "[]"))
             put("transactions", JSONArray(prefs.getString(transactionsKey, "[]") ?: "[]"))
@@ -2649,25 +2933,7 @@ class MainActivity : Activity() {
         }
 
         transactions.forEach { transaction ->
-            val details = buildString {
-                append(transaction.type)
-                append(" • ")
-                append(transaction.assetName)
-                append(" • ")
-                append(formatQuantity(transaction.quantity))
-                append(" @ ")
-                append(formatToman(transaction.price))
-                if (transaction.type == "SELL") {
-                    append("\nRealized P/L: ")
-                    append(formatSignedToman(transaction.realizedProfit))
-                } else if (transaction.type == "INCOME" || transaction.type == "EXPENSE") {
-                    append("\nBalance change: ")
-                    append(if (transaction.type == "INCOME") "+" else "-")
-                    append(formatToman(transaction.price))
-                }
-                append("\n")
-                append(formatDate(transaction.timestamp))
-            }
+            val details = transactionDetails(transaction)
 
             parent.addView(
                 TextView(this).apply {
