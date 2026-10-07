@@ -432,7 +432,9 @@ class MainActivity : Activity() {
             array.put(
                 JSONObject().apply {
                     put("name", asset.name)
-                    put("category", asset.category)
+                    put("category", canonicalSharedCategory(JSONObject().apply {
+                        put("category", asset.category)
+                    }))
                     put("quantity", asset.quantity)
                     put("price", asset.price)
                     put("averageCost", asset.averageCost)
@@ -1068,7 +1070,7 @@ class MainActivity : Activity() {
         }
 
         val subtitle = TextView(this).apply {
-            text = "Your portfolio, one step closer to mobile.\nv0.22.0"
+            text = "Your portfolio, one step closer to mobile.\nv0.23.0"
             textSize = 17f
             gravity = Gravity.CENTER
             setTextColor(Color.DKGRAY)
@@ -1349,7 +1351,7 @@ class MainActivity : Activity() {
         container.addView(backButton, buttonParams)
         container.addView(
             TextView(this).apply {
-                text = "Investment Android • v0.22.0"
+                text = "Investment Android • v0.23.0"
                 textSize = 12f
                 gravity = Gravity.CENTER
                 setTextColor(Color.GRAY)
@@ -4174,6 +4176,31 @@ class MainActivity : Activity() {
         }
     }
 
+    private fun canonicalSharedCategory(item: JSONObject): String {
+        val raw = item.optString("category", "Other").trim()
+        val folded = raw.lowercase(Locale.US)
+        val source = item.optJSONObject("source")
+        val sourceGroup = source?.optString("group_id", "")?.lowercase(Locale.US) ?: ""
+        val sourceKind = source?.optString("group_kind", "")?.lowercase(Locale.US) ?: ""
+
+        return when {
+            sourceGroup == "cash" || "cash" in folded || "currenc" in folded || "bank" in folded ->
+                "Cash"
+            sourceGroup == "crypto" || sourceKind == "crypto" || "crypto" in folded ->
+                "Crypto"
+            sourceGroup == "stocks" || "stock" in folded || "share" in folded || "equity" in folded ->
+                "Stocks"
+            sourceGroup == "gold" || sourceGroup == "silver" ||
+                "gold" in folded || "silver" in folded || "precious" in folded || "metal" in folded ->
+                "Gold"
+            sourceGroup == "fund" || "fund" in folded || "etf" in folded ->
+                "Fund"
+            coreCategories.any { it.equals(raw, ignoreCase = true) } ->
+                coreCategories.first { it.equals(raw, ignoreCase = true) }
+            else -> raw.ifBlank { "Other" }
+        }
+    }
+
     private fun importSharedPortfolio(portfolio: JSONObject) {
         val rawAssets = portfolio.optJSONArray("assets")
             ?: throw IllegalArgumentException("Shared portfolio does not contain assets.")
@@ -4184,7 +4211,7 @@ class MainActivity : Activity() {
         for (index in 0 until rawAssets.length()) {
             val item = rawAssets.getJSONObject(index)
             val name = item.optString("name", "Asset").trim().ifBlank { "Asset" }
-            val category = item.optString("category", "Other").trim().ifBlank { "Other" }
+            val category = canonicalSharedCategory(item)
             val quantity = item.optDouble("quantity", 1.0).coerceAtLeast(0.0)
             val price = item.optDouble("price_toman", 0.0).coerceAtLeast(0.0)
             val averageCost = item.optDouble("average_cost_toman", price).coerceAtLeast(0.0)
