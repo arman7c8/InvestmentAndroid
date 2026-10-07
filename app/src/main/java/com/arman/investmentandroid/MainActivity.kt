@@ -1105,7 +1105,7 @@ class MainActivity : Activity() {
         }
 
         val subtitle = TextView(this).apply {
-            text = "Your portfolio, one step closer to mobile.\nv0.28.0"
+            text = "Your portfolio, one step closer to mobile.\nv0.29.0"
             textSize = 17f
             gravity = Gravity.CENTER
             setTextColor(Color.DKGRAY)
@@ -1386,7 +1386,7 @@ class MainActivity : Activity() {
         container.addView(backButton, buttonParams)
         container.addView(
             TextView(this).apply {
-                text = "Investment Android • v0.28.0"
+                text = "Investment Android • v0.29.0"
                 textSize = 12f
                 gravity = Gravity.CENTER
                 setTextColor(Color.GRAY)
@@ -3903,14 +3903,10 @@ class MainActivity : Activity() {
         val prefs = getSharedPreferences(prefsName, MODE_PRIVATE)
         val now = System.currentTimeMillis()
         val lastCheck = prefs.getLong(cloudLastAutoCheckKey, 0L)
-        val minCheckGap = kotlin.math.min(
-            loadCloudAutoSyncMinutes() * 60_000L,
-            30_000L
-        )
+        val minCheckGap = loadCloudAutoSyncMinutes() * 60_000L
         if (now - lastCheck < minCheckGap) {
             return
         }
-        prefs.edit().putLong(cloudLastAutoCheckKey, now).apply()
 
         try {
             val raw = contentResolver.openInputStream(uri)
@@ -3922,6 +3918,10 @@ class MainActivity : Activity() {
                 return
             }
             val remote = root.optJSONObject("sharedPortfolio") ?: return
+            // Only record a completed auto-check after the cloud file was read and
+            // validated successfully. Transient provider failures can then retry on
+            // the next resume instead of being suppressed for the whole interval.
+            prefs.edit().putLong(cloudLastAutoCheckKey, now).apply()
             val local = buildSharedPortfolio()
             val baseline = prefs.getString(cloudSharedFingerprintKey, null) ?: return
             val localFingerprint = sharedFingerprint(local)
