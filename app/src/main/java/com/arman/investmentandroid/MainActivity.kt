@@ -1059,7 +1059,7 @@ class MainActivity : Activity() {
         }
 
         val subtitle = TextView(this).apply {
-            text = "Your portfolio, one step closer to mobile.\nv0.17.0"
+            text = "Your portfolio, one step closer to mobile.\nv0.18.0"
             textSize = 17f
             gravity = Gravity.CENTER
             setTextColor(Color.DKGRAY)
@@ -3614,8 +3614,8 @@ class MainActivity : Activity() {
         AlertDialog.Builder(this)
             .setTitle("Load from Cloud?")
             .setMessage(
-                "This will replace the current portfolio with the connected cloud backup. " +
-                    "An Undo checkpoint will be created first."
+                "This will apply the shared portfolio from Cloud. Android history and settings " +
+                    "are kept when available, and an Undo checkpoint is created first."
             )
             .setNegativeButton("Cancel", null)
             .setPositiveButton("Load") { _, _ -> loadFromCloud() }
@@ -3798,6 +3798,37 @@ class MainActivity : Activity() {
         recordSnapshot(imported)
     }
 
+    private fun restoreAndroidSupplementalPayload(root: JSONObject) {
+        val transactions = root.optJSONArray("transactions") ?: JSONArray()
+        val snapshots = root.optJSONArray("snapshots") ?: JSONArray()
+        val displayUnit = root.optString("displayUnit", loadDisplayUnit())
+        val summaryPeriod = root.optString("summaryPeriod", loadSummaryPeriod())
+        val autoRefreshMinutes = root.optInt("autoRefreshMinutes", loadAutoRefreshMinutes())
+        val savedCategories = root.optJSONArray("categories")
+
+        val categories = loadCategories()
+        if (savedCategories != null) {
+            for (index in 0 until savedCategories.length()) {
+                val value = savedCategories.optString(index, "").trim()
+                if (value.isNotBlank() && categories.none { it.equals(value, ignoreCase = true) }) {
+                    categories.add(value)
+                }
+            }
+        }
+
+        getSharedPreferences(prefsName, MODE_PRIVATE)
+            .edit()
+            .putString(transactionsKey, transactions.toString())
+            .putString(snapshotsKey, snapshots.toString())
+            .putString(displayUnitKey, displayUnit)
+            .putString(summaryPeriodKey, summaryPeriod)
+            .putInt(autoRefreshMinutesKey, autoRefreshMinutes)
+            .putString(categoriesKey, JSONArray(categories).toString())
+            .apply()
+
+        scheduleAutoRefresh()
+    }
+
     private fun restoreAndroidBackupPayload(root: JSONObject) {
         val assets = root.getJSONArray("assets")
         val transactions = root.optJSONArray("transactions") ?: JSONArray()
@@ -3839,14 +3870,14 @@ class MainActivity : Activity() {
         val root = JSONObject(raw)
 
         if (root.optString("format") == "investment.shared.portfolio") {
-            val androidBackup = root.optJSONObject("androidBackup")
-            if (androidBackup != null) {
-                restoreAndroidBackupPayload(androidBackup)
-            } else {
-                val sharedPortfolio = root.optJSONObject("sharedPortfolio")
-                    ?: throw IllegalArgumentException("Shared portfolio payload is missing.")
-                importSharedPortfolio(sharedPortfolio)
-            }
+            val sharedPortfolio = root.optJSONObject("sharedPortfolio")
+                ?: throw IllegalArgumentException("Shared portfolio payload is missing.")
+
+            // Shared holdings are authoritative for cross-platform sync. Android-only
+            // history/settings are restored separately so a newer Windows portfolio
+            // cannot be overwritten by a stale androidBackup section.
+            importSharedPortfolio(sharedPortfolio)
+            root.optJSONObject("androidBackup")?.let { restoreAndroidSupplementalPayload(it) }
             return
         }
 
