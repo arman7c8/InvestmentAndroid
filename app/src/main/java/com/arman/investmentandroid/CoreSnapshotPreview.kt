@@ -102,6 +102,7 @@ object CoreSnapshotPreview {
             require(value.isFinite()) { "Non-finite account balance." }
             item.getString("id") + ": " + value + " Toman"
         }
+        CoreLedgerParity.verify(tables, preview)
         val tx = preview.getInt("transactionCount")
         val corrections = preview.getInt("correctionCount")
         val revisions = preview.getInt("revisionCount")

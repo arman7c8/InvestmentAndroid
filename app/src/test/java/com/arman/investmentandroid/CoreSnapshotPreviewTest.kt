@@ -17,14 +17,26 @@ class CoreSnapshotPreviewTest {
         for (name in names) {
             val rows = JSONArray()
             val ids = JSONArray()
+            var columns = JSONArray().put("id")
             if (name == "assets") { rows.put(JSONArray().put("btc")); ids.put(1) }
-            tables.put(name, JSONObject().put("columns", JSONArray().put("id"))
+            if (name == "imported_snapshots") { rows.put(JSONArray().put(1)); ids.put(1) }
+            if (name == "opening_positions") {
+                columns = JSONArray().put("snapshot_id").put("asset_id").put("quantity")
+                rows.put(JSONArray().put(1).put("btc").put(1.0)); ids.put(1)
+            }
+            if (name == "opening_accounts") {
+                columns = JSONArray().put("snapshot_id").put("account_id").put("balance_toman")
+                rows.put(JSONArray().put(1).put("wallet").put(1_500_000.0)); ids.put(1)
+            }
+            tables.put(name, JSONObject().put("columns", columns)
                 .put("rowids", ids).put("rows", rows))
         }
         val holding = JSONObject().put("id", "btc").put("name", "Bitcoin")
             .put("quantity", 1.0).put("value_toman", 5_000_000.0)
         val projection = JSONObject().put("holdings", JSONArray().put(holding))
-            .put("cashAccounts", JSONArray()).put("transactionCount", 0)
+            .put("cashAccounts", JSONArray().put(JSONObject()
+                .put("id", "wallet").put("balance_toman", 1_500_000.0)))
+            .put("transactionCount", 0).put("activeTransactionCount", 0)
             .put("correctionCount", 0).put("revisionCount", 0).put("voidCount", 0)
         val payload = JSONObject().put("source", JSONObject()
             .put("platform", "windows-core").put("schemaVersion", 11))
@@ -58,6 +70,26 @@ class CoreSnapshotPreviewTest {
             CoreSnapshotPreview.inspect(wrap(payload).toString())
         }
     }
+    @Test fun validChecksumButWrongHoldingQuantityIsRejected() {
+        val sample = sample()
+        val body = JSONObject(String(Base64.getDecoder().decode(sample.getString("payloadBase64"))))
+        body.getJSONObject("preview").getJSONArray("holdings")
+            .getJSONObject(0).put("quantity", 10.0)
+        assertThrows(IllegalArgumentException::class.java) {
+            CoreSnapshotPreview.inspect(wrap(body).toString())
+        }
+    }
+
+    @Test fun validChecksumButWrongCashBalanceIsRejected() {
+        val sample = sample()
+        val body = JSONObject(String(Base64.getDecoder().decode(sample.getString("payloadBase64"))))
+        body.getJSONObject("preview").getJSONArray("cashAccounts")
+            .getJSONObject(0).put("balance_toman", 0.0)
+        assertThrows(IllegalArgumentException::class.java) {
+            CoreSnapshotPreview.inspect(wrap(body).toString())
+        }
+    }
+
     @Test fun AndroidJsonIsNotAcceptedAsWindowsCore() {
         assertThrows(IllegalArgumentException::class.java) {
             CoreSnapshotPreview.inspect("""{"format":"investment.shared.portfolio","schemaVersion":1}""")
