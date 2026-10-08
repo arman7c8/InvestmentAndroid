@@ -39,6 +39,14 @@ class PortfolioSafetyTest {
     }
 
     @Test
+    fun cloudSourceChangingDuringPreparationBlocksWrite() {
+        assertThrows(IllegalStateException::class.java) {
+            PortfolioSafety.requireUnchangedCloudFile("old", "modified remotely")
+        }
+        PortfolioSafety.requireUnchangedCloudFile("unchanged", "unchanged")
+    }
+
+    @Test
     fun completedProviderWriteMustReadBackExactly() {
         var stored = "old"
         PortfolioSafety.writeAndVerifyBackup("new backup", { stored = it }, { stored })

@@ -2,7 +2,12 @@
 
 Android portfolio app (`com.arman.investmentandroid`). The shared backup format is
 `investment.shared.portfolio`, `schemaVersion: 1`, with amounts in Toman. Keep this
-format compatible with existing Investment portfolio files.
+format for Android-managed portfolio JSON. Windows v0.11.0 Core uses a separate
+SQLite schema (11) and Drive app-data backup, NOT this JSON format. There is
+currently no production-safe full Android/Windows two-way synchronization.
+See [Interoperability and safety](docs/INTEROPERABILITY.md) before attempting any
+cross-device restore. Do not select the Windows `Investment-core.sqlite3` as an
+Android cloud document.
 
 ## Install a test build
 

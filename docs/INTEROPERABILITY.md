@@ -37,3 +37,7 @@ The Windows repository is unchanged by this checkpoint. A Windows Core exporter/
 ## Additional check: history-only drift
 
 The old Android `MATCH` decision compared only holdings. The phone and cloud could have identical quantities/prices but different Android transactions or snapshots; UI then incorrectly reported a complete sync. Android now compares the entire Android transaction/snapshot record identity sets before claiming MATCH. Divergence opens the conflict decision (manual Sync) or displays a warning without marking success (Smart Sync). Conflicting same-ID records fail closed. Choosing Use Phone still merges distinct cloud history into the uploaded document, but existing clients may require a later Load Cloud to populate locally missing cloud events. This is **not** yet atomic multi-device ledger synchronization.
+
+## Best-effort SAF race check
+
+Before overwriting an existing Android JSON cloud document, the client now re-reads its source after creating a private recovery copy and aborts if the bytes changed since its first read. This narrows the read/write race window but is **not** a provider revision precondition or a transaction. The final no-loss guarantee requires remote compare-and-swap/ETag or a single-authoritative-write service.

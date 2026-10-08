@@ -4340,7 +4340,12 @@ class MainActivity : Activity() {
                 when (result.decision) {
                     PortfolioSafety.SyncDecision.MATCH -> {
                         val remoteHistory = JSONObject(result.raw).optJSONObject("androidBackup")
-                        if (PortfolioSafety.historyEquivalent(buildAndroidBackupPayload(), remoteHistory)) {
+                        val historyMatches = try {
+                            PortfolioSafety.historyEquivalent(buildAndroidBackupPayload(), remoteHistory)
+                        } catch (_: IllegalArgumentException) {
+                            false  // Report a conflict rather than crashing the UI callback.
+                        }
+                        if (historyMatches) {
                             saveCloudBaseline(result.remote)
                             markCloudSync()
                         } else {
@@ -4564,6 +4569,7 @@ class MainActivity : Activity() {
 
                 val document = mergedBackupDocument(existingRaw)
                 preserveCloudBeforeWrite(uri, existingRaw)
+                PortfolioSafety.requireUnchangedCloudFile(existingRaw, readUriText(uri))
                 val writtenRaw = document.toString(2)
                 PortfolioSafety.writeAndVerifyBackup(
                     writtenRaw,

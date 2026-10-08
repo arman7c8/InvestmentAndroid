@@ -4,6 +4,8 @@ package com.arman.investmentandroid
 object UiText {
     private val fa = mapOf(
         "Investment Android" to "سرمایه‌گذاری اندروید",
+        "Cloud file changed while preparing the backup. Nothing was overwritten; sync again." to
+            "فایل ابری هنگام آماده‌سازی پشتیبان تغییر کرد. هیچ داده‌ای جایگزین نشد؛ دوباره همگام‌سازی کنید.",
         "Portfolio holdings match, but Android history differs. No data was overwritten. Choose which history to reconcile." to
             "دارایی‌های گوشی و ابر یکسان‌اند، اما تاریخچه متفاوت است. هیچ داده‌ای جایگزین نشد؛ روش رفع تعارض را انتخاب کنید.",
         "Portfolio holdings match, but Android history differs. Use Cloud Sync to resolve it; no data was overwritten." to

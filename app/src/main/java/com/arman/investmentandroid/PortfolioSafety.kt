@@ -37,6 +37,13 @@ object PortfolioSafety {
         val incomingAssetCount: Int
     )
 
+    /** Detect a source changed between an initial SAF read and the intended write. */
+    fun requireUnchangedCloudFile(initial: String, beforeWrite: String) {
+        check(initial == beforeWrite) {
+            "Cloud file changed while preparing the backup. Nothing was overwritten; sync again."
+        }
+    }
+
     /** A provider write is successful only when the same complete bytes can be read back. */
     fun writeAndVerifyBackup(
         expected: String,
