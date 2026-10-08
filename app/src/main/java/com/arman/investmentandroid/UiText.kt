@@ -4,6 +4,23 @@ package com.arman.investmentandroid
 object UiText {
     private val fa = mapOf(
         "Investment Android" to "سرمایه‌گذاری اندروید",
+        "Delete " to "حذف ",
+        "Set " to "ثبت ",
+        "Recover" to "بازیابی",
+        "Recommended: use the same Investment-shared.json file as Windows.\n\n" to
+            "پیشنهاد: همان فایل Investment-shared.json برنامهٔ ویندوز را انتخاب کنید.\n\n",
+        "The file is valid and connected. Load its data now or keep this phone's data? " to
+            "فایل معتبر و متصل است. دادهٔ آن بارگذاری شود یا دادهٔ گوشی حفظ شود؟ ",
+        "This transaction is not the latest managed change for the asset, " to
+            "این تراکنش آخرین تغییر مدیریت‌شدهٔ دارایی نیست، ",
+        "This will apply the shared portfolio from Cloud. Android history and settings " to
+            "سبد مشترک ابر اعمال می‌شود. تاریخچه و تنظیمات اندروید ",
+        "This will reverse the portfolio effect of this transaction " to
+            "اثر این تراکنش بر سبد بازگردانده می‌شود ",
+        "Both copies may contain changes. " to "هر دو نسخه ممکن است تغییر کرده باشند. ",
+        "Smart sync found changes on both Phone and Cloud. " to
+            "همگام‌سازی هوشمند در گوشی و ابر تغییر پیدا کرد. ",
+        "Smart sync set to every " to "فاصلهٔ همگام‌سازی هوشمند: هر ",
         "Open Portfolio" to "ورود به سبد",
         "My Portfolio" to "سبد سرمایه‌گذاری من",
         "Total Portfolio Value" to "ارزش کل سبد",
@@ -128,6 +145,17 @@ object UiText {
         "Buy" to "خرید", "Sell" to "فروش",
         "Set Final Balance" to "ثبت موجودی نهایی",
         "Activity Manager" to "مدیریت فعالیت‌ها",
+        "BUY" to "خرید", "SELL" to "فروش",
+        "INCOME" to "درآمد", "EXPENSE" to "هزینه",
+        "\nAmount: " to "\nمبلغ: ",
+        "\nQuantity: " to "\nمقدار: ",
+        "\nPrice: " to "\nقیمت: ",
+        "\nRealized P/L: " to "\nسود/زیان تحقق‌یافته: ",
+        "\nChange: " to "\nتغییر: ",
+        "\nLegacy activity: portfolio-safe revert unavailable" to
+            "\nفعالیت قدیمی: بازگردانی ایمن سبد در دسترس نیست",
+        "Revert Transaction" to "بازگردانی تراکنش",
+        "Revert Unavailable" to "بازگردانی در دسترس نیست",
         "Page %d of %d • %d saved transactions" to "صفحهٔ %d از %d • %d تراکنش ذخیره شده",
         "Newer" to "جدیدتر",
         "Older" to "قدیمی‌تر",
@@ -220,6 +248,18 @@ object UiText {
         "Toman" to "تومان", "Rial" to "ریال"
     )
 
-    fun translate(value: String, language: String): String =
-        if (language == "fa") fa[value] ?: value else value
+    fun translate(value: String, language: String): String {
+        if (language != "fa") return value
+        fa[value]?.let { return it }
+        if (value.startsWith("Investment Android • v")) {
+            return value.replaceFirst("Investment Android", "سرمایه‌گذاری اندروید")
+        }
+        if (value.startsWith("Your portfolio, one step closer to mobile.\nv")) {
+            return value.replaceFirst(
+                "Your portfolio, one step closer to mobile.",
+                "سبد سرمایه‌گذاری شما در گوشی"
+            )
+        }
+        return value
+    }
 }

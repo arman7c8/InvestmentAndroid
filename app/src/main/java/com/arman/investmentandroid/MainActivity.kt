@@ -2696,9 +2696,9 @@ class MainActivity : Activity() {
         card.addView(
             TextView(this).apply {
                 text = buildString {
-                    append(asset.category)
+                    append(ui(asset.category))
                     append(" • ")
-                    append(asset.priceSource)
+                    append(ui(asset.priceSource))
                     if (asset.symbol.isNotBlank()) {
                         append(" • ")
                         append(asset.symbol)
@@ -3061,9 +3061,9 @@ class MainActivity : Activity() {
                     text = buildString {
                         append(asset.name)
                         append(" • ")
-                        append(asset.category)
+                        append(ui(asset.category))
                         append(" • ")
-                        append(asset.priceSource)
+                        append(ui(asset.priceSource))
                         if (asset.symbol.isNotBlank()) {
                             append(" • ")
                             append(asset.symbol)
@@ -3428,26 +3428,26 @@ class MainActivity : Activity() {
 
     private fun transactionDetails(transaction: Transaction): String {
         return buildString {
-            append(transaction.type)
+            append(ui(transaction.type))
             append(" • ")
             append(transaction.assetName)
             if (transaction.type == "INCOME" || transaction.type == "EXPENSE") {
-                append("\nAmount: ")
+                append(ui("\nAmount: "))
                 append(formatToman(transaction.price))
             } else {
-                append("\nQuantity: ")
+                append(ui("\nQuantity: "))
                 append(formatQuantity(transaction.quantity))
-                append("\nPrice: ")
+                append(ui("\nPrice: "))
                 append(formatToman(transaction.price))
             }
             if (transaction.type == "SELL") {
-                append("\nRealized P/L: ")
+                append(ui("\nRealized P/L: "))
                 append(formatSignedToman(transaction.realizedProfit))
             }
             append("\n")
             append(formatDate(transaction.timestamp))
             if (!transaction.managed) {
-                append("\nLegacy activity: portfolio-safe revert unavailable")
+                append(ui("\nLegacy activity: portfolio-safe revert unavailable"))
             }
         }
     }
@@ -3564,7 +3564,7 @@ class MainActivity : Activity() {
 
                     val canRevert = canSafelyRevertTransaction(transaction, transactions, assets)
                     val revertButton = Button(this).apply {
-                        text = if (canRevert) "Revert Transaction" else "Revert Unavailable"
+                        text = ui(if (canRevert) "Revert Transaction" else "Revert Unavailable")
                         isAllCaps = false
                         isEnabled = canRevert
                         setOnClickListener {
@@ -3674,7 +3674,7 @@ class MainActivity : Activity() {
                         text = buildString {
                             append(formatToman(snapshot.totalValue))
                             if (change != null) {
-                                append("\nChange: ")
+                                append(ui("\nChange: "))
                                 append(formatSignedToman(change))
                             }
                             append("\n")

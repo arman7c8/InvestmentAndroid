@@ -12,4 +12,11 @@ class UiTextTest {
     @Test fun unknownUserAssetNamesAreNotChanged() {
         assertEquals("Custom BTC", UiText.translate("Custom BTC", "fa"))
     }
+
+    @Test fun versionCaptionKeepsVersionNumber() {
+        assertEquals(
+            "سرمایه‌گذاری اندروید • v0.32.0",
+            UiText.translate("Investment Android • v0.32.0", "fa")
+        )
+    }
 }
