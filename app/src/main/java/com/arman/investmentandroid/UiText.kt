@@ -4,6 +4,16 @@ package com.arman.investmentandroid
 object UiText {
     private val fa = mapOf(
         "Investment Android" to "سرمایه‌گذاری اندروید",
+        "Windows Core SQLite backups cannot be imported as Android JSON. Nothing was changed." to
+            "پشتیبان SQLite ویندوز را نمی‌توان به‌عنوان JSON اندروید وارد کرد؛ داده‌ها تغییر نکردند.",
+        "A Windows Core ledger cannot be reduced to Android holdings. Nothing was changed." to
+            "دفتر کل ویندوز را نمی‌توان بدون اتلاف اطلاعات به دارایی‌های اندروید تبدیل کرد؛ داده‌ها تغییر نکردند.",
+        "History conflict: phone and cloud have different records for the same id. Nothing was overwritten." to
+            "تداخل تاریخچه: رکوردهای هم‌شناسه در گوشی و ابر متفاوت‌اند؛ هیچ داده‌ای جایگزین نشد.",
+        "History conflict: phone and cloud have different records for the same timestamp. Nothing was overwritten." to
+            "تداخل تاریخچه: رکوردهای هم‌زمان در گوشی و ابر متفاوت‌اند؛ هیچ داده‌ای جایگزین نشد.",
+        "Cash holdings with quantity other than 1 cannot be imported without changing value. Nothing was changed." to
+            "مقدار دارایی نقدی باید یک باشد؛ برای جلوگیری از تغییر ارزش، واردکردن متوقف شد.",
         "All prices updated." to "همهٔ قیمت‌ها به‌روز شدند.",
         "Export Backup" to "خروجی پشتیبان",
         "Import Backup" to "ورود فایل پشتیبان",

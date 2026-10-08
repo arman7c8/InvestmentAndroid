@@ -51,6 +51,9 @@ object PortfolioSafety {
 
     fun validateBackup(raw: String): ValidatedBackup {
         require(raw.isNotBlank()) { "Backup file is empty. Local data was not changed." }
+        require(!raw.startsWith("SQLite format 3")) {
+            "Windows Core SQLite backups cannot be imported as Android JSON. Nothing was changed."
+        }
         val root = try {
             JSONObject(raw)
         } catch (_: JSONException) {
@@ -72,6 +75,9 @@ object PortfolioSafety {
             "Unsupported shared portfolio schema. Local data was not changed."
         }
 
+        require(!root.has("coreLedger") && !root.has("windowsCore")) {
+            "A Windows Core ledger cannot be reduced to Android holdings. Nothing was changed."
+        }
         val portfolio = requiredObject(root, "sharedPortfolio")
         val count = validateSharedPortfolio(portfolio)
         val androidPayload = root.optJSONObject("androidBackup")
@@ -157,13 +163,31 @@ object PortfolioSafety {
         else -> SyncDecision.CONFLICT
     }
 
-    /** Keep phone history when a shared cloud file contains an older Android supplement. */
+    /** Compare JSON structurally, without depending on object key insertion order. */
+    private fun canonicalJson(value: Any?): String = when (value) {
+        is JSONObject -> value.keys().asSequence().toList().sorted()
+            .joinToString(prefix = "{", postfix = "}") { key ->
+                JSONObject.quote(key) + ":" + canonicalJson(value.get(key))
+            }
+        is JSONArray -> (0 until value.length())
+            .joinToString(prefix = "[", postfix = "]") { canonicalJson(value.get(it)) }
+        is String -> JSONObject.quote(value)
+        null, JSONObject.NULL -> "null"
+        is Number, is Boolean -> value.toString()
+        else -> JSONObject.quote(value.toString())
+    }
+
+    /** A same-ID record with different content is a conflict, never last-writer-wins. */
     fun mergeHistory(local: JSONArray, remote: JSONArray, identityKey: String): JSONArray {
         val byIdentity = linkedMapOf<String, JSONObject>()
         fun addAll(array: JSONArray) {
             for (index in 0 until array.length()) {
                 val item = array.getJSONObject(index)
-                val identity = item.optString(identityKey, "").ifBlank { item.toString() }
+                val identity = item.optString(identityKey, "").ifBlank { canonicalJson(item) }
+                val previous = byIdentity[identity]
+                require(previous == null || canonicalJson(previous) == canonicalJson(item)) {
+                    "History conflict: phone and cloud have different records for the same $identityKey. Nothing was overwritten."
+                }
                 byIdentity[identity] = item
             }
         }
@@ -173,6 +197,22 @@ object PortfolioSafety {
         byIdentity.values.sortedBy { it.optLong("timestamp", 0L) }
             .forEach { merged.put(it) }
         return merged
+    }
+
+    /** Preserve future supplemental metadata during cloud writes. */
+    fun preserveSupplementalFields(local: JSONObject, remote: JSONObject?): JSONObject {
+        val merged = if (remote == null) JSONObject() else JSONObject(remote.toString())
+        for (key in local.keys()) {
+            merged.put(key, local.get(key))
+        }
+        return merged
+    }
+
+    /** Current Android cash representation is balance-as-price with quantity one. */
+    fun requireSafeCashQuantity(category: String, quantity: Double) {
+        require(category != "Cash" || quantity == 1.0) {
+            "Cash holdings with quantity other than 1 cannot be imported without changing value. Nothing was changed."
+        }
     }
 
     private fun validateLegacyAndroidBackup(root: JSONObject): ValidatedBackup {

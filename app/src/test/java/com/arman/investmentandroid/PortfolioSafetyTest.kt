@@ -219,13 +219,65 @@ class PortfolioSafetyTest {
     }
 
     @Test
-    fun cloudRestorePrefersPhoneCopyForMatchingTransactionId() {
+    fun cloudRestoreRejectsConflictingTransactionWithoutDiscardingEitherRecord() {
         val remote = JSONArray().put(JSONObject().put("id", "same").put("timestamp", 1L))
         val local = JSONArray().put(JSONObject().put("id", "same").put("timestamp", 2L))
-        val merged = PortfolioSafety.mergeHistory(local, remote, "id")
+        assertThrows(IllegalArgumentException::class.java) {
+            PortfolioSafety.mergeHistory(local, remote, "id")
+        }
+        assertEquals(1L, remote.getJSONObject(0).getLong("timestamp"))
+        assertEquals(2L, local.getJSONObject(0).getLong("timestamp"))
+    }
 
-        assertEquals(1, merged.length())
-        assertEquals(2L, merged.getJSONObject(0).getLong("timestamp"))
+    @Test
+    fun identicalRecordsWithDifferentJsonKeyOrderMergeOnce() {
+        val remote = JSONArray().put(JSONObject().put("id", "same").put("timestamp", 1L))
+        val local = JSONArray().put(JSONObject().put("timestamp", 1L).put("id", "same"))
+        assertEquals(1, PortfolioSafety.mergeHistory(local, remote, "id").length())
+    }
+
+    @Test
+    fun conflictingSnapshotAtSameTimestampIsNotSilentlyReplaced() {
+        val remote = JSONArray().put(JSONObject().put("timestamp", 10L).put("totalValue", 100))
+        val local = JSONArray().put(JSONObject().put("timestamp", 10L).put("totalValue", 250))
+        assertThrows(IllegalArgumentException::class.java) {
+            PortfolioSafety.mergeHistory(local, remote, "timestamp")
+        }
+    }
+
+    @Test
+    fun newSupplementPreservesUnrecognizedRemoteFields() {
+        val local = JSONObject().put("transactions", JSONArray()).put("backupVersion", 3)
+        val remote = JSONObject().put("customFutureField", JSONObject().put("keep", "yes"))
+            .put("backupVersion", 2)
+        val merged = PortfolioSafety.preserveSupplementalFields(local, remote)
+        assertEquals("yes", merged.getJSONObject("customFutureField").getString("keep"))
+        assertEquals(3, merged.getInt("backupVersion"))
+    }
+
+    @Test
+    fun legacyWindowsSqliteIsRejectedBeforeJsonParsing() {
+        val error = assertThrows(IllegalArgumentException::class.java) {
+            PortfolioSafety.validateBackup("SQLite format 3\\u0000fake core file")
+        }
+        org.junit.Assert.assertTrue(error.message!!.contains("Windows Core SQLite"))
+    }
+
+    @Test
+    fun embeddedCoreLedgerIsRejectedRatherThanDroppingItsHistory() {
+        val document = sharedDocument().put("coreLedger", JSONObject().put("transactions", JSONArray()))
+        assertThrows(IllegalArgumentException::class.java) {
+            PortfolioSafety.validateBackup(document.toString())
+        }
+    }
+
+    @Test
+    fun cashImportMustNotDiscardUnitQuantity() {
+        PortfolioSafety.requireSafeCashQuantity("Cash", 1.0)
+        assertThrows(IllegalArgumentException::class.java) {
+            PortfolioSafety.requireSafeCashQuantity("Cash", 50.0)
+        }
+        PortfolioSafety.requireSafeCashQuantity("Crypto", 50.0)
     }
 
     @Test

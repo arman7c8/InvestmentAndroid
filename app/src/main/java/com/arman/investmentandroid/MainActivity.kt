@@ -4089,7 +4089,7 @@ class MainActivity : Activity() {
                 )
             }
         }
-        root.put("androidBackup", localSupplement)
+        root.put("androidBackup", PortfolioSafety.preserveSupplementalFields(localSupplement, remoteSupplement))
         return root
     }
 
@@ -4888,6 +4888,7 @@ class MainActivity : Activity() {
             val name = item.optString("name", "Asset").trim().ifBlank { "Asset" }
             val category = canonicalSharedCategory(item)
             val quantity = item.getDouble("quantity")
+            PortfolioSafety.requireSafeCashQuantity(category, quantity)
             val price = item.getDouble("price_toman")
             val averageCost = if (item.has("average_cost_toman")) {
                 item.getDouble("average_cost_toman")
