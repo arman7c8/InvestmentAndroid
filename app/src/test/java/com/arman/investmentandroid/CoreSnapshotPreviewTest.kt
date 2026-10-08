@@ -43,12 +43,12 @@ class CoreSnapshotPreviewTest {
             .put("tables", tables).put("preview", projection)
         return wrap(payload)
     }
-    private fun wrap(payload: JSONObject): JSONObject {
+    private fun wrap(payload: JSONObject, version: Int = 1): JSONObject {
         val bytes = payload.toString().toByteArray(Charsets.UTF_8)
         val checksum = MessageDigest.getInstance("SHA-256")
             .digest(bytes).joinToString("") { "%02x".format(it.toInt() and 0xff) }
         return JSONObject().put("format", "investment.core.readonly")
-            .put("contractVersion", 1).put("encoding", "base64-json-utf8")
+            .put("contractVersion", version).put("encoding", "base64-json-utf8")
             .put("sha256", checksum).put("payloadBase64", Base64.getEncoder().encodeToString(bytes))
     }
     @Test fun validSnapshotCanBePreviewedWithoutImporting() {
@@ -140,6 +140,102 @@ class CoreSnapshotPreviewTest {
         body.getJSONObject("preview").put("transactionCount", 1).put("activeTransactionCount", 1)
         assertThrows(IllegalArgumentException::class.java) {
             CoreSnapshotPreview.inspect(wrap(body).toString())
+        }
+    }
+
+
+    private fun syntheticV2(): JSONObject {
+        val base = sample()
+        val payload = JSONObject(String(Base64.getDecoder().decode(base.getString("payloadBase64"))))
+        val tables = payload.getJSONObject("tables")
+        tables.getJSONObject("portfolio_groups")
+            .put("columns", JSONArray().put("id").put("name").put("target_pct")
+                .put("sort_order").put("pricing_currency"))
+            .put("rowids", JSONArray().put(1))
+            .put("rows", JSONArray().put(JSONArray().put("crypto")
+                .put("Digital Assets").put(40.0).put(2).put("USDT")))
+        tables.getJSONObject("assets")
+            .put("columns", JSONArray().put("id").put("name").put("category")
+                .put("target_pct").put("currency"))
+            .put("rows", JSONArray().put(JSONArray().put("btc").put("Bitcoin")
+                .put("crypto").put(25.0).put("USDT")))
+        tables.put("portfolio_settings", JSONObject()
+            .put("columns", JSONArray().put("key").put("value"))
+            .put("rowids", JSONArray().put(1).put(2).put(3))
+            .put("rows", JSONArray()
+                .put(JSONArray().put("allocation_tolerance_pct").put(1.5))
+                .put(JSONArray().put("reserve_target_toman").put(22_000_000.0))
+                .put(JSONArray().put("group_tolerance_pct:crypto").put(2.5))))
+        val policy = JSONObject()
+            .put("groups", JSONArray().put(JSONObject().put("id", "crypto")
+                .put("name", "Digital Assets").put("targetPercent", 40.0)
+                .put("sortOrder", 2).put("pricingCurrency", "USDT")))
+            .put("assets", JSONArray().put(JSONObject().put("id", "btc")
+                .put("name", "Bitcoin").put("groupId", "crypto")
+                .put("currency", "USDT").put("targetWithinGroupPercent", 25.0)
+                .put("effectiveTargetPercent", 10.0)))
+            .put("allocationTolerancePercent", 1.5)
+            .put("groupToleranceOverrides", JSONArray().put(JSONObject()
+                .put("id", "crypto").put("percent", 2.5)))
+            .put("assetToleranceOverrides", JSONArray())
+            .put("reserveTargetToman", 22_000_000.0)
+        payload.getJSONObject("preview").put("policy", policy)
+        return wrap(payload, version = 2)
+    }
+
+    @Test fun version2PreservesTwoLevelTargetsAndTolerance() {
+        val result = CoreSnapshotPreview.inspect(syntheticV2().toString())
+        val policy = result.policy!!
+        assertEquals(40.0, policy.groups[0].target, 0.00001)
+        assertEquals(25.0, policy.assets[0].within, 0.00001)
+        assertEquals(10.0, policy.assets[0].effective, 0.00001)
+        assertEquals(22_000_000.0, policy.reserve, 0.00001)
+        assertEquals(1, policy.groupOverrides)
+        assertEquals(true, result.display(true).contains("سیاست سرمایه‌گذاری"))
+    }
+
+    @Test fun correctChecksumWithWrongEffectiveTargetIsRejected() {
+        val v2 = syntheticV2()
+        val payload = JSONObject(String(Base64.getDecoder().decode(v2.getString("payloadBase64"))))
+        payload.getJSONObject("preview").getJSONObject("policy")
+            .getJSONArray("assets").getJSONObject(0).put("effectiveTargetPercent", 30.0)
+        assertThrows(IllegalArgumentException::class.java) {
+            CoreSnapshotPreview.inspect(wrap(payload, 2).toString())
+        }
+    }
+
+    @Test fun correctChecksumWithWrongGroupTargetIsRejected() {
+        val v2 = syntheticV2()
+        val payload = JSONObject(String(Base64.getDecoder().decode(v2.getString("payloadBase64"))))
+        payload.getJSONObject("preview").getJSONObject("policy")
+            .getJSONArray("groups").getJSONObject(0).put("targetPercent", 90.0)
+        assertThrows(IllegalArgumentException::class.java) {
+            CoreSnapshotPreview.inspect(wrap(payload, 2).toString())
+        }
+    }
+
+    @Test fun version2WrongToleranceReferenceIsRejected() {
+        val v2 = syntheticV2()
+        val payload = JSONObject(String(Base64.getDecoder().decode(v2.getString("payloadBase64"))))
+        payload.getJSONObject("preview").getJSONObject("policy")
+            .getJSONArray("groupToleranceOverrides").getJSONObject(0).put("id", "ghost")
+        assertThrows(IllegalArgumentException::class.java) {
+            CoreSnapshotPreview.inspect(wrap(payload, 2).toString())
+        }
+    }
+
+    @Test fun version2MissingPolicyIsRejected() {
+        val v2 = syntheticV2()
+        val payload = JSONObject(String(Base64.getDecoder().decode(v2.getString("payloadBase64"))))
+        payload.getJSONObject("preview").remove("policy")
+        assertThrows(Exception::class.java) {
+            CoreSnapshotPreview.inspect(wrap(payload, 2).toString())
+        }
+    }
+
+    @Test fun unsupportedVersionIsRejected() {
+        assertThrows(IllegalArgumentException::class.java) {
+            CoreSnapshotPreview.inspect(syntheticV2().put("contractVersion", 3).toString())
         }
     }
 

@@ -8,7 +8,8 @@ import java.util.Base64
 object CoreSnapshotPreview {
     data class Summary(val schema: Int, val tableCount: Int, val holdings: List<String>,
         val accounts: List<String>, val transactions: Int, val corrections: Int,
-        val revisions: Int, val voids: Int, val sha: String) {
+        val revisions: Int, val voids: Int, val sha: String,
+        val policy: CorePolicyParity.Summary? = null) {
         fun display(fa: Boolean): String {
             val lines = mutableListOf<String>()
             lines.add(if (fa) "فقط پیش‌نمایش؛ هیچ داده‌ای وارد یا همگام نمی‌شود." else
@@ -23,6 +24,7 @@ object CoreSnapshotPreview {
             if (holdings.size > 80) lines.add("… " + (holdings.size - 80) + " more")
             lines.add(if (fa) "حساب‌های نقدی:" else "Cash accounts:")
             lines.addAll(accounts.take(40))
+            policy?.let { lines.addAll(it.display(fa)) }
             lines.add("SHA-256: " + sha)
             return lines.joinToString("\n")
         }
@@ -34,7 +36,10 @@ object CoreSnapshotPreview {
         require(envelope.optString("format") == "investment.core.readonly") {
             "Not a Windows Core read-only export."
         }
-        require(envelope.optInt("contractVersion", -1) == 1) { "Unsupported Core interchange version." }
+        val contractVersion = envelope.optInt("contractVersion", -1)
+        require(contractVersion == 1 || contractVersion == 2) {
+            "Unsupported Core interchange version."
+        }
         require(envelope.optString("encoding") == "base64-json-utf8") { "Unsupported export encoding." }
         val sha = envelope.getString("sha256")
         require(Regex("[0-9a-f]{64}").matches(sha)) { "Missing or invalid SHA-256." }
@@ -113,6 +118,9 @@ object CoreSnapshotPreview {
                 "Preview count mismatch in " + table
             }
         }
-        return Summary(schema, count, holdings, accounts, tx, corrections, revisions, voids, sha)
+        val policy = if (contractVersion == 2) {
+            CorePolicyParity.inspect(tables, preview.getJSONObject("policy"))
+        } else null
+        return Summary(schema, count, holdings, accounts, tx, corrections, revisions, voids, sha, policy)
     }
 }
