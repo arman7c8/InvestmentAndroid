@@ -156,7 +156,6 @@ object PortfolioSafety {
         addAll(local)
         val merged = JSONArray()
         byIdentity.values.sortedBy { it.optLong("timestamp", 0L) }
-            .takeLast(100)
             .forEach { merged.put(it) }
         return merged
     }
