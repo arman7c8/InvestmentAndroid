@@ -208,6 +208,36 @@ class PortfolioSafetyTest {
     }
 
     @Test
+    fun matchingHoldingsCannotHideNewLocalTransaction() {
+        val local = JSONObject().put("transactions", JSONArray().put(JSONObject().put("id", "new")))
+        val cloud = JSONObject().put("transactions", JSONArray())
+        org.junit.Assert.assertFalse(PortfolioSafety.historyEquivalent(local, cloud))
+    }
+
+    @Test
+    fun matchingHoldingsCannotHideCloudOnlySnapshot() {
+        val local = JSONObject().put("snapshots", JSONArray())
+        val cloud = JSONObject().put("snapshots", JSONArray().put(JSONObject().put("timestamp", 123L)))
+        org.junit.Assert.assertFalse(PortfolioSafety.historyEquivalent(local, cloud))
+    }
+
+    @Test
+    fun matchingAndroidHistoryWithReorderedObjectKeysIsEquivalent() {
+        val local = JSONObject().put("transactions", JSONArray().put(JSONObject().put("id", "same").put("timestamp", 1)))
+        val cloud = JSONObject().put("transactions", JSONArray().put(JSONObject().put("timestamp", 1).put("id", "same")))
+        org.junit.Assert.assertTrue(PortfolioSafety.historyEquivalent(local, cloud))
+    }
+
+    @Test
+    fun sameIdWithDifferentHistoryContentFailsEvenWhenHoldingsMatch() {
+        val local = JSONObject().put("transactions", JSONArray().put(JSONObject().put("id", "same").put("timestamp", 1)))
+        val cloud = JSONObject().put("transactions", JSONArray().put(JSONObject().put("id", "same").put("timestamp", 2)))
+        assertThrows(IllegalArgumentException::class.java) {
+            PortfolioSafety.historyEquivalent(local, cloud)
+        }
+    }
+
+    @Test
     fun cloudRestoreKeepsLocalTransactionsMissingFromOlderCloudSupplement() {
         val remote = JSONArray().put(JSONObject().put("id", "old").put("timestamp", 1L))
         val local = JSONArray().put(JSONObject().put("id", "new").put("timestamp", 2L))

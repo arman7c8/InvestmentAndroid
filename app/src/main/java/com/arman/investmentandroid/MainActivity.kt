@@ -4339,8 +4339,17 @@ class MainActivity : Activity() {
                 prefs.edit().putLong(cloudLastAutoCheckKey, now).apply()
                 when (result.decision) {
                     PortfolioSafety.SyncDecision.MATCH -> {
-                        saveCloudBaseline(result.remote)
-                        markCloudSync()
+                        val remoteHistory = JSONObject(result.raw).optJSONObject("androidBackup")
+                        if (PortfolioSafety.historyEquivalent(buildAndroidBackupPayload(), remoteHistory)) {
+                            saveCloudBaseline(result.remote)
+                            markCloudSync()
+                        } else {
+                            Toast.makeText(
+                                this,
+                                ui("Portfolio holdings match, but Android history differs. Use Cloud Sync to resolve it; no data was overwritten."),
+                                Toast.LENGTH_LONG
+                            ).show()
+                        }
                     }
                     PortfolioSafety.SyncDecision.LOAD_REMOTE -> {
                         applyCloudRaw(result.raw, sharedFingerprint(result.local))
@@ -4478,7 +4487,8 @@ class MainActivity : Activity() {
         val raw: String? = null,
         val local: JSONObject? = null,
         val remote: JSONObject? = null,
-        val savedPortfolio: JSONObject? = null
+        val savedPortfolio: JSONObject? = null,
+        val historyOnly: Boolean = false
     )
 
     private fun syncToCloud(forcePhoneData: Boolean = false) {
@@ -4516,11 +4526,24 @@ class MainActivity : Activity() {
                             baseline
                         )
                     ) {
-                        PortfolioSafety.SyncDecision.MATCH ->
-                            return@runStorageOperation CloudSyncResult(
-                                action = CloudSyncAction.MATCH,
-                                remote = remoteShared
+                        PortfolioSafety.SyncDecision.MATCH -> {
+                            val historyMatches = PortfolioSafety.historyEquivalent(
+                                buildAndroidBackupPayload(), validated.androidPayload
                             )
+                            return@runStorageOperation if (historyMatches) {
+                                CloudSyncResult(
+                                    action = CloudSyncAction.MATCH,
+                                    remote = remoteShared
+                                )
+                            } else {
+                                CloudSyncResult(
+                                    action = CloudSyncAction.CONFLICT,
+                                    local = localShared,
+                                    remote = remoteShared,
+                                    historyOnly = true
+                                )
+                            }
+                        }
                         PortfolioSafety.SyncDecision.LOAD_REMOTE ->
                             return@runStorageOperation CloudSyncResult(
                                 action = CloudSyncAction.LOAD_REMOTE,
@@ -4579,13 +4602,16 @@ class MainActivity : Activity() {
                         val remote = result.remote
                             ?: throw IllegalStateException("Cloud comparison data is missing.")
                         val changedRows = sharedChangeCount(local, remote)
+                        val message = if (result.historyOnly) {
+                            ui("Portfolio holdings match, but Android history differs. No data was overwritten. Choose which history to reconcile.")
+                        } else {
+                            ui("Both copies may contain changes. ") + changedRows +
+                                ui(" asset row(s) differ. Nothing was overwritten. ") +
+                                ui("Choose which portfolio to keep.")
+                        }
                         AlertDialog.Builder(this)
                             .setTitle(ui("Cloud Sync Conflict"))
-                            .setMessage(
-                                ui("Both copies may contain changes. ") + changedRows +
-                                    ui(" asset row(s) differ. Nothing was overwritten. ") +
-                                    ui("Choose which portfolio to keep.")
-                            )
+                            .setMessage(message)
                             .setNegativeButton(ui("Cancel"), null)
                             .setNeutralButton(ui("Use Cloud")) { _, _ -> loadFromCloud() }
                             .setPositiveButton(ui("Use Phone")) { _, _ ->

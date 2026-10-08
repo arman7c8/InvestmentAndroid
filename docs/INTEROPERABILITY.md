@@ -33,3 +33,7 @@ These are not two copies of the same ledger, and signing in to the same Google a
 **Phase C: synchronized writes.** Use a single shared transport and stable portfolio ID with explicit origin and revision; implement compare-and-swap / ETag preconditions or provider-native revision enforcement, immutable event-ID deduplication, conflict UI, atomic local backup/restore and remote checksum verification. Never treat a last-read snapshot as atomic remote locking. Only enable write actions after concurrency, offline, cross-device and rollback tests with disposable data pass.
 
 The Windows repository is unchanged by this checkpoint. A Windows Core exporter/reader and/or agreed shared bridge service are necessary for actual dual-platform synchronization.
+
+## Additional check: history-only drift
+
+The old Android `MATCH` decision compared only holdings. The phone and cloud could have identical quantities/prices but different Android transactions or snapshots; UI then incorrectly reported a complete sync. Android now compares the entire Android transaction/snapshot record identity sets before claiming MATCH. Divergence opens the conflict decision (manual Sync) or displays a warning without marking success (Smart Sync). Conflicting same-ID records fail closed. Choosing Use Phone still merges distinct cloud history into the uploaded document, but existing clients may require a later Load Cloud to populate locally missing cloud events. This is **not** yet atomic multi-device ledger synchronization.

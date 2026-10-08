@@ -199,6 +199,18 @@ object PortfolioSafety {
         return merged
     }
 
+    /** Match complete Android histories; identical holdings alone do not imply sync. */
+    fun historyEquivalent(local: JSONObject, remote: JSONObject?): Boolean {
+        for ((field, identity) in listOf("transactions" to "id", "snapshots" to "timestamp")) {
+            val localRows = local.optJSONArray(field) ?: JSONArray()
+            val remoteRows = remote?.optJSONArray(field) ?: JSONArray()
+            val combined = mergeHistory(localRows, remoteRows, identity)
+            if (combined.length() != localRows.length() ||
+                combined.length() != remoteRows.length()) return false
+        }
+        return true
+    }
+
     /** Preserve future supplemental metadata during cloud writes. */
     fun preserveSupplementalFields(local: JSONObject, remote: JSONObject?): JSONObject {
         val merged = if (remote == null) JSONObject() else JSONObject(remote.toString())
