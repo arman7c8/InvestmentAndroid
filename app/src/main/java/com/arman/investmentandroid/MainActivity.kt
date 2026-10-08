@@ -113,6 +113,8 @@ class MainActivity : Activity() {
     private val exportBackupRequestCode = 1001
     private val importBackupRequestCode = 1002
     private val corePreviewRequestCode = 1005
+    private val corePolicyProposalSaveRequestCode = 1006
+    private var pendingCorePolicyProposalJson: String? = null
     private val createCloudBackupRequestCode = 1003
     private val connectCloudBackupRequestCode = 1004
     private val coreCategories = listOf("Cash", "Gold", "Stocks", "Crypto", "Fund", "Other")
@@ -4752,6 +4754,89 @@ class MainActivity : Activity() {
         startActivityForResult(intent, corePreviewRequestCode)
     }
 
+    /** Offline target-change *request* editor; edits are NOT applied on this device. */
+    private fun showCorePolicyProposalEditor(snapshot: CoreSnapshotPreview.Summary) {
+        val policy = snapshot.policy ?: return
+        data class PolicyField(
+            val scope: String, val id: String,
+            val current: Double, val input: EditText
+        )
+        val rows = mutableListOf<PolicyField>()
+        val container = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(16), dp(8), dp(16), dp(12))
+        }
+        container.addView(TextView(this).apply {
+            text = ui("Target request only. No changes are applied until Windows validates and confirms.")
+            textSize = 13f
+            setPadding(0, 0, 0, dp(12))
+        })
+        fun field(label: String, scope: String, id: String, current: Double) {
+            container.addView(TextView(this).apply {
+                text = label
+                textSize = 14f
+                setPadding(0, dp(6), 0, 0)
+            })
+            val input = EditText(this).apply {
+                inputType = InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_FLAG_DECIMAL
+                setSingleLine(true)
+                setText(current.toString())
+                selectAll()
+            }
+            container.addView(input)
+            rows.add(PolicyField(scope, id, current, input))
+        }
+        policy.groups.forEach { group ->
+            field(ui("Category target (%)") + " — " + group.name,
+                "group_target", group.id, group.target)
+            policy.assets.filter { it.groupId == group.id }.forEach { asset ->
+                field("    " + ui("Asset target in category (%)") + " — " + asset.name,
+                    "asset_target", asset.id, asset.within)
+            }
+        }
+        field(ui("Global tolerance (%)"), "allocation_tolerance", "", policy.tolerance)
+        field(ui("Cash reserve target (Toman)"), "reserve_target", "", policy.reserve)
+        val scroll = ScrollView(this).apply { addView(container) }
+        val dialog = AlertDialog.Builder(this)
+            .setTitle(ui("Prepare Windows target change request"))
+            .setView(scroll)
+            .setNegativeButton(ui("Cancel"), null)
+            .setPositiveButton(ui("Export request (not applied)"), null)
+            .create()
+        dialog.setOnShowListener {
+            dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
+                val changes = mutableListOf<CorePolicyProposal.Edit>()
+                for (row in rows) {
+                    val newValue = UiText.parseUserNumber(row.input.text.toString())
+                    if (newValue == null) {
+                        row.input.error = ui("Enter a valid number")
+                        return@setOnClickListener
+                    }
+                    if (kotlin.math.abs(newValue - row.current) > 1e-9) {
+                        changes.add(CorePolicyProposal.Edit(row.scope, row.id, newValue))
+                    }
+                }
+                try {
+                    val json = CorePolicyProposal.create(snapshot, changes)
+                    pendingCorePolicyProposalJson = json
+                    val intent = Intent(Intent.ACTION_CREATE_DOCUMENT).apply {
+                        addCategory(Intent.CATEGORY_OPENABLE)
+                        type = "application/json"
+                        putExtra(Intent.EXTRA_TITLE, "Investment-Core-policy-proposal.json")
+                    }
+                    dialog.dismiss()
+                    startActivityForResult(intent, corePolicyProposalSaveRequestCode)
+                } catch (error: Exception) {
+                    Toast.makeText(
+                        this, ui(error.message ?: "Invalid target request."),
+                        Toast.LENGTH_LONG
+                    ).show()
+                }
+            }
+        }
+        dialog.show()
+    }
+
     private fun exportBackup() {
         val intent = Intent(Intent.ACTION_CREATE_DOCUMENT).apply {
             addCategory(Intent.CATEGORY_OPENABLE)
@@ -5110,6 +5195,7 @@ class MainActivity : Activity() {
         super.onActivityResult(requestCode, resultCode, data)
 
         if (resultCode != RESULT_OK) {
+            if (requestCode == corePolicyProposalSaveRequestCode) pendingCorePolicyProposalJson = null
             if (
                 requestCode == createCloudBackupRequestCode ||
                 requestCode == connectCloudBackupRequestCode
@@ -5124,6 +5210,7 @@ class MainActivity : Activity() {
         }
 
         val uri = data?.data ?: run {
+            if (requestCode == corePolicyProposalSaveRequestCode) pendingCorePolicyProposalJson = null
             if (
                 requestCode == createCloudBackupRequestCode ||
                 requestCode == connectCloudBackupRequestCode
@@ -5149,14 +5236,45 @@ class MainActivity : Activity() {
                                     setTextIsSelectable(true)
                                 })
                             }
-                            AlertDialog.Builder(this)
+                            val previewDialog = AlertDialog.Builder(this)
                                 .setTitle(ui("Windows Core Preview (Read-only)"))
                                 .setView(scroll)
                                 .setPositiveButton(ui("Close"), null)
-                                .show()
+                            if (summary.policy != null) {
+                                previewDialog.setNeutralButton(
+                                    ui("Prepare target request")
+                                ) { _, _ -> showCorePolicyProposalEditor(summary) }
+                            }
+                            previewDialog.show()
                         },
                         onFailure = { error -> showBackupFileError(error) }
                     )
+                }
+                corePolicyProposalSaveRequestCode -> {
+                    val proposal = pendingCorePolicyProposalJson
+                    pendingCorePolicyProposalJson = null
+                    if (proposal == null) {
+                        showBackupFileError(IllegalStateException("No target request to export."))
+                    } else {
+                        runStorageOperation(
+                            label = "Saving target change request",
+                            task = {
+                                PortfolioSafety.writeAndVerifyBackup(
+                                    proposal,
+                                    write = { writeUriText(uri, it) },
+                                    read = { readUriText(uri) }
+                                )
+                            },
+                            onSuccess = {
+                                Toast.makeText(
+                                    this,
+                                    ui("Target request saved. No investment data changed."),
+                                    Toast.LENGTH_LONG
+                                ).show()
+                            },
+                            onFailure = { error -> showBackupFileError(error) }
+                        )
+                    }
                 }
                 exportBackupRequestCode -> {
                     runStorageOperation(
