@@ -1,7 +1,17 @@
 <resources>
-    <style name="AppTheme" parent="android:style/Theme.Material.Light.NoActionBar">
+    <style name="AppTheme" parent="android:style/Theme.Material.NoActionBar">
         <item name="android:fontFamily">sans</item>
-        <item name="android:windowLightStatusBar">true</item>
+        <item name="android:colorAccent">@color/investment_accent</item>
+        <item name="android:windowBackground">@color/investment_background</item>
+        <item name="android:statusBarColor">@color/investment_background</item>
+        <item name="android:navigationBarColor">@color/investment_background</item>
+        <item name="android:windowLightStatusBar">false</item>
         <item name="android:windowActionModeOverlay">true</item>
+        <item name="android:buttonStyle">@style/InvestmentButton</item>
+    </style>
+    <style name="InvestmentButton" parent="android:style/Widget.Material.Button">
+        <item name="android:backgroundTint">@color/investment_button</item>
+        <item name="android:textColor">@color/investment_primary_text</item>
+        <item name="android:fontFamily">sans-medium</item>
     </style>
 </resources>

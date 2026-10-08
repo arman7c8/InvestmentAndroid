@@ -8,6 +8,7 @@ import android.content.res.Configuration
 import android.graphics.Color
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
+import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
@@ -16,6 +17,7 @@ import android.util.AtomicFile
 import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
+import android.view.WindowInsets
 import android.widget.ArrayAdapter
 import android.widget.Button
 import android.widget.CheckBox
@@ -155,21 +157,41 @@ class MainActivity : Activity() {
         super.attachBaseContext(base.createConfigurationContext(configuration))
     }
 
+    /** Avoid Android 15+ edge-to-edge status/navigation-bar overlap. */
+    private fun showContentRespectingSystemBars(content: View) {
+        if (Build.VERSION.SDK_INT >= 35) {
+            val left = content.paddingLeft
+            val top = content.paddingTop
+            val right = content.paddingRight
+            val bottom = content.paddingBottom
+            content.setOnApplyWindowInsetsListener { view, insets ->
+                val bars = insets.getInsets(WindowInsets.Type.systemBars())
+                view.setPadding(left + bars.left, top + bars.top,
+                    right + bars.right, bottom + bars.bottom)
+                insets
+            }
+        }
+        setContentView(content)
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        window.statusBarColor = PortfolioAppearance.BACKGROUND
+        window.navigationBarColor = PortfolioAppearance.BACKGROUND
         window.decorView.layoutDirection =
             if (uiLanguage() == "fa") View.LAYOUT_DIRECTION_RTL else View.LAYOUT_DIRECTION_LTR
         ensureSeedData()
 
-        if (isAppLockEnabled()) {
-            showLockedScreen()
-            showStartupUnlockDialog()
-        } else if (savedInstanceState?.getBoolean("price_center_screen") == true) {
-            showPriceCenterScreen()
-        } else if (savedInstanceState?.getBoolean("portfolio_screen") == true) {
-            showPortfolioScreen()
-        } else {
-            showWelcomeScreen()
+        when (StartupScreen.destination(
+            lockEnabled = isAppLockEnabled(),
+            priceCenterRestored = savedInstanceState?.getBoolean("price_center_screen") == true
+        )) {
+            StartupScreen.Destination.LOCKED -> {
+                showLockedScreen()
+                showStartupUnlockDialog()
+            }
+            StartupScreen.Destination.PRICE_CENTER -> showPriceCenterScreen()
+            StartupScreen.Destination.PORTFOLIO -> showPortfolioScreen()
         }
     }
 
@@ -985,7 +1007,7 @@ class MainActivity : Activity() {
             orientation = LinearLayout.VERTICAL
             gravity = Gravity.CENTER
             setPadding(dp(24), dp(24), dp(24), dp(24))
-            setBackgroundColor(Color.rgb(248, 249, 250))
+            setBackgroundColor(PortfolioAppearance.BACKGROUND)
         }
 
         root.addView(
@@ -994,7 +1016,7 @@ class MainActivity : Activity() {
                 textSize = 28f
                 setTypeface(typeface, Typeface.BOLD)
                 gravity = Gravity.CENTER
-                setTextColor(Color.rgb(35, 35, 35))
+                setTextColor(PortfolioAppearance.TEXT_PRIMARY)
             }
         )
 
@@ -1003,12 +1025,12 @@ class MainActivity : Activity() {
                 text = ui("App Locked")
                 textSize = 16f
                 gravity = Gravity.CENTER
-                setTextColor(Color.GRAY)
+                setTextColor(PortfolioAppearance.TEXT_SECONDARY)
                 setPadding(0, dp(12), 0, 0)
             }
         )
 
-        setContentView(root)
+        showContentRespectingSystemBars(root)
     }
 
     private fun pinInput(): EditText {
@@ -1036,7 +1058,7 @@ class MainActivity : Activity() {
                 val pin = input.text.toString()
                 if (verifyPin(pin)) {
                     dialog.dismiss()
-                    showWelcomeScreen()
+                    showPortfolioScreen()
                 } else {
                     input.error = ui("Incorrect PIN")
                     input.selectAll()
@@ -1211,53 +1233,6 @@ class MainActivity : Activity() {
         startActivity(Intent.createChooser(intent, "Share AI Portfolio Summary"))
     }
 
-    private fun showWelcomeScreen() {
-        onPortfolioScreen = false
-        onPriceCenterScreen = false
-
-        val root = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            gravity = Gravity.CENTER
-            setPadding(dp(24), dp(24), dp(24), dp(24))
-            setBackgroundColor(Color.rgb(248, 249, 250))
-        }
-
-        val title = TextView(this).apply {
-            text = ui("Investment Android")
-            textSize = 30f
-            setTypeface(typeface, Typeface.BOLD)
-            gravity = Gravity.CENTER
-            setTextColor(Color.rgb(35, 35, 35))
-        }
-
-        val subtitle = TextView(this).apply {
-            text = ui("Your portfolio, one step closer to mobile.\nv${BuildConfig.VERSION_NAME}")
-            textSize = 17f
-            gravity = Gravity.CENTER
-            setTextColor(Color.DKGRAY)
-            setPadding(0, dp(18), 0, dp(28))
-        }
-
-        val startButton = Button(this).apply {
-            text = ui("Open Portfolio")
-            isAllCaps = false
-            textSize = 17f
-            setOnClickListener { showPortfolioScreen() }
-        }
-
-        root.addView(title)
-        root.addView(subtitle)
-        root.addView(
-            startButton,
-            LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT
-            )
-        )
-
-        setContentView(root)
-    }
-
     private fun showPortfolioScreen() {
         onPortfolioScreen = true
         onPriceCenterScreen = false
@@ -1278,8 +1253,8 @@ class MainActivity : Activity() {
 
         val container = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(dp(20), dp(24), dp(20), dp(24))
-            setBackgroundColor(Color.rgb(248, 249, 250))
+            setPadding(dp(16), dp(12), dp(16), dp(24))
+            setBackgroundColor(PortfolioAppearance.BACKGROUND)
         }
 
         container.addView(
@@ -1287,7 +1262,7 @@ class MainActivity : Activity() {
                 text = ui("My Portfolio")
                 textSize = 28f
                 setTypeface(typeface, Typeface.BOLD)
-                setTextColor(Color.rgb(30, 30, 30))
+                setTextColor(PortfolioAppearance.TEXT_PRIMARY)
             }
         )
 
@@ -1314,7 +1289,7 @@ class MainActivity : Activity() {
                 TextView(this).apply {
                     text = ui("No assets yet. Tap Add Asset to create your first one.")
                     textSize = 16f
-                    setTextColor(Color.DKGRAY)
+                    setTextColor(PortfolioAppearance.TEXT_SECONDARY)
                     setPadding(0, dp(14), 0, dp(22))
                 }
             )
@@ -1433,12 +1408,6 @@ class MainActivity : Activity() {
             }
         }
 
-        val backButton = Button(this).apply {
-            text = ui("Back")
-            isAllCaps = false
-            setOnClickListener { showWelcomeScreen() }
-        }
-
         val buttonParams = LinearLayout.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT,
             ViewGroup.LayoutParams.WRAP_CONTENT
@@ -1453,7 +1422,7 @@ class MainActivity : Activity() {
                 text = ui("Quick Actions")
                 textSize = 19f
                 setTypeface(typeface, Typeface.BOLD)
-                setTextColor(Color.rgb(35, 35, 35))
+                setTextColor(PortfolioAppearance.TEXT_PRIMARY)
                 setPadding(0, dp(22), 0, dp(6))
             }
         )
@@ -1509,19 +1478,19 @@ class MainActivity : Activity() {
         )
         container.addView(undoRedoRow, buttonParams)
 
-        container.addView(backButton, buttonParams)
         container.addView(
             TextView(this).apply {
                 text = ui("Investment Android • v${BuildConfig.VERSION_NAME}")
                 textSize = 12f
                 gravity = Gravity.CENTER
-                setTextColor(Color.GRAY)
+                setTextColor(PortfolioAppearance.TEXT_SECONDARY)
                 setPadding(0, dp(18), 0, dp(4))
             }
         )
 
-        setContentView(
+        showContentRespectingSystemBars(
             ScrollView(this).apply {
+                setBackgroundColor(PortfolioAppearance.BACKGROUND)
                 addView(container)
             }
         )
@@ -1558,9 +1527,9 @@ class MainActivity : Activity() {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(16), dp(13), dp(16), dp(13))
             background = GradientDrawable().apply {
-                setColor(Color.WHITE)
+                setColor(PortfolioAppearance.SURFACE)
                 cornerRadius = dp(14).toFloat()
-                setStroke(dp(1), Color.rgb(225, 225, 225))
+                setStroke(dp(1), PortfolioAppearance.BORDER)
             }
         }
 
@@ -1578,7 +1547,7 @@ class MainActivity : Activity() {
                 text = ui("Cloud Sync")
                 textSize = 15f
                 setTypeface(typeface, Typeface.BOLD)
-                setTextColor(Color.rgb(35, 35, 35))
+                setTextColor(PortfolioAppearance.TEXT_PRIMARY)
             }
         )
 
@@ -1601,9 +1570,9 @@ class MainActivity : Activity() {
                 textSize = 12f
                 setTextColor(
                     when (localCloudSyncState()) {
-                        "Last known synced" -> Color.rgb(25, 125, 70)
-                        "Local changes pending sync" -> Color.rgb(185, 110, 25)
-                        else -> Color.GRAY
+                        "Last known synced" -> PortfolioAppearance.SUCCESS
+                        "Local changes pending sync" -> PortfolioAppearance.WARNING
+                        else -> PortfolioAppearance.TEXT_SECONDARY
                     }
                 )
             }
@@ -1674,10 +1643,12 @@ class MainActivity : Activity() {
         val card = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(18), dp(16), dp(18), dp(16))
-            background = GradientDrawable().apply {
-                setColor(Color.WHITE)
+            background = GradientDrawable(
+                GradientDrawable.Orientation.TL_BR,
+                intArrayOf(PortfolioAppearance.HERO_START, PortfolioAppearance.HERO_END)
+            ).apply {
                 cornerRadius = dp(16).toFloat()
-                setStroke(dp(1), Color.rgb(225, 225, 225))
+                setStroke(dp(1), PortfolioAppearance.BORDER)
             }
         }
 
@@ -1685,7 +1656,7 @@ class MainActivity : Activity() {
             TextView(this).apply {
                 text = ui("Total Portfolio Value")
                 textSize = 13f
-                setTextColor(Color.GRAY)
+                setTextColor(PortfolioAppearance.TEXT_SECONDARY)
             }
         )
 
@@ -1694,7 +1665,7 @@ class MainActivity : Activity() {
                 text = formatToman(totalValue)
                 textSize = 27f
                 setTypeface(typeface, Typeface.BOLD)
-                setTextColor(Color.rgb(25, 25, 25))
+                setTextColor(PortfolioAppearance.TEXT_PRIMARY)
                 setPadding(0, dp(2), 0, dp(10))
             }
         )
@@ -1703,7 +1674,7 @@ class MainActivity : Activity() {
             TextView(this).apply {
                 text = ui("Invested: ") + formatToman(totalInvested)
                 textSize = 13f
-                setTextColor(Color.DKGRAY)
+                setTextColor(PortfolioAppearance.TEXT_SECONDARY)
             }
         )
 
@@ -1714,9 +1685,9 @@ class MainActivity : Activity() {
                 setTypeface(typeface, Typeface.BOLD)
                 setTextColor(
                     when {
-                        totalProfit > 0.0 -> Color.rgb(25, 125, 70)
-                        totalProfit < 0.0 -> Color.rgb(180, 45, 45)
-                        else -> Color.DKGRAY
+                        totalProfit > 0.0 -> PortfolioAppearance.SUCCESS
+                        totalProfit < 0.0 -> PortfolioAppearance.ERROR
+                        else -> PortfolioAppearance.TEXT_SECONDARY
                     }
                 )
                 setPadding(0, dp(2), 0, dp(8))
@@ -1730,9 +1701,9 @@ class MainActivity : Activity() {
                     textSize = 13f
                     setTextColor(
                         when {
-                            snapshotChange > 0.0 -> Color.rgb(25, 125, 70)
-                            snapshotChange < 0.0 -> Color.rgb(180, 45, 45)
-                            else -> Color.GRAY
+                            snapshotChange > 0.0 -> PortfolioAppearance.SUCCESS
+                            snapshotChange < 0.0 -> PortfolioAppearance.ERROR
+                            else -> PortfolioAppearance.TEXT_SECONDARY
                         }
                     )
                     setPadding(0, 0, 0, dp(6))
@@ -1749,7 +1720,7 @@ class MainActivity : Activity() {
                     ui("Prices have not been updated yet.")
                 }
                 textSize = 12f
-                setTextColor(Color.GRAY)
+                setTextColor(PortfolioAppearance.TEXT_SECONDARY)
             }
         )
 
@@ -1768,9 +1739,9 @@ class MainActivity : Activity() {
                 setTypeface(typeface, Typeface.BOLD)
                 setTextColor(
                     when {
-                        !targetValid -> Color.rgb(185, 110, 25)
-                        needAttention == 0 -> Color.rgb(25, 125, 70)
-                        else -> Color.rgb(185, 110, 25)
+                        !targetValid -> PortfolioAppearance.WARNING
+                        needAttention == 0 -> PortfolioAppearance.SUCCESS
+                        else -> PortfolioAppearance.WARNING
                     }
                 )
                 setPadding(0, dp(9), 0, 0)
@@ -1799,7 +1770,7 @@ class MainActivity : Activity() {
                 text = ui("Category Breakdown")
                 textSize = 19f
                 setTypeface(typeface, Typeface.BOLD)
-                setTextColor(Color.rgb(35, 35, 35))
+                setTextColor(PortfolioAppearance.TEXT_PRIMARY)
                 setPadding(0, dp(14), 0, dp(6))
             }
         )
@@ -1824,12 +1795,12 @@ class MainActivity : Activity() {
                             formatToman(value)
                         )
                         textSize = 13f
-                        setTextColor(Color.DKGRAY)
+                        setTextColor(PortfolioAppearance.TEXT_SECONDARY)
                         setPadding(dp(12), dp(8), dp(12), dp(8))
                         background = GradientDrawable().apply {
-                            setColor(Color.WHITE)
+                            setColor(PortfolioAppearance.SURFACE)
                             cornerRadius = dp(10).toFloat()
-                            setStroke(dp(1), Color.rgb(232, 232, 232))
+                            setStroke(dp(1), PortfolioAppearance.BORDER)
                         }
                     },
                     LinearLayout.LayoutParams(
@@ -1854,7 +1825,7 @@ class MainActivity : Activity() {
                 text = ui("Holdings")
                 textSize = 21f
                 setTypeface(typeface, Typeface.BOLD)
-                setTextColor(Color.rgb(35, 35, 35))
+                setTextColor(PortfolioAppearance.TEXT_PRIMARY)
                 setPadding(0, dp(18), 0, dp(8))
             }
         )
@@ -1880,7 +1851,7 @@ class MainActivity : Activity() {
                     )
                     textSize = 15f
                     setTypeface(typeface, Typeface.BOLD)
-                    setTextColor(Color.rgb(55, 55, 55))
+                    setTextColor(PortfolioAppearance.TEXT_SECONDARY)
                     setPadding(0, dp(8), 0, dp(7))
                 }
             )
@@ -1991,7 +1962,7 @@ class MainActivity : Activity() {
                 text = ui(period) + ui(" Summary")
                 textSize = 19f
                 setTypeface(typeface, Typeface.BOLD)
-                setTextColor(Color.rgb(35, 35, 35))
+                setTextColor(PortfolioAppearance.TEXT_PRIMARY)
                 setPadding(0, dp(12), 0, dp(6))
             }
         )
@@ -2011,12 +1982,12 @@ class MainActivity : Activity() {
                     append(formatToman(expense))
                 }
                 textSize = 13f
-                setTextColor(Color.DKGRAY)
+                setTextColor(PortfolioAppearance.TEXT_SECONDARY)
                 setPadding(dp(12), dp(9), dp(12), dp(9))
                 background = GradientDrawable().apply {
-                    setColor(Color.WHITE)
+                    setColor(PortfolioAppearance.SURFACE)
                     cornerRadius = dp(10).toFloat()
-                    setStroke(dp(1), Color.rgb(230, 230, 230))
+                    setStroke(dp(1), PortfolioAppearance.BORDER)
                 }
             },
             LinearLayout.LayoutParams(
@@ -2203,7 +2174,7 @@ class MainActivity : Activity() {
                     text = ui(textValue)
                     textSize = 14f
                     setTypeface(typeface, Typeface.BOLD)
-                    setTextColor(Color.DKGRAY)
+                    setTextColor(PortfolioAppearance.TEXT_SECONDARY)
                     setPadding(0, dp(10), 0, dp(4))
                 }
             )
@@ -2313,7 +2284,7 @@ class MainActivity : Activity() {
                     text = asset.name
                     textSize = 15f
                     setTypeface(typeface, Typeface.BOLD)
-                    setTextColor(Color.DKGRAY)
+                    setTextColor(PortfolioAppearance.TEXT_SECONDARY)
                     setPadding(0, dp(8), 0, 0)
                 }
             )
@@ -2432,7 +2403,7 @@ class MainActivity : Activity() {
                 text = ui("Rebalance Summary")
                 textSize = 21f
                 setTypeface(typeface, Typeface.BOLD)
-                setTextColor(Color.rgb(35, 35, 35))
+                setTextColor(PortfolioAppearance.TEXT_PRIMARY)
                 setPadding(0, dp(22), 0, dp(8))
             }
         )
@@ -2442,7 +2413,7 @@ class MainActivity : Activity() {
                 TextView(this).apply {
                     text = ui("Set targets to a total of 100% to activate rebalance guidance.")
                     textSize = 14f
-                    setTextColor(Color.GRAY)
+                    setTextColor(PortfolioAppearance.TEXT_SECONDARY)
                     setPadding(0, 0, 0, dp(10))
                 }
             )
@@ -2471,7 +2442,7 @@ class MainActivity : Activity() {
                 TextView(this).apply {
                     text = ui("Portfolio is within tolerance. No rebalance action is needed.")
                     textSize = 14f
-                    setTextColor(Color.rgb(25, 125, 70))
+                    setTextColor(PortfolioAppearance.SUCCESS)
                     setPadding(0, 0, 0, dp(10))
                 }
             )
@@ -2488,12 +2459,12 @@ class MainActivity : Activity() {
                     }
                     textSize = 14f
                     setTypeface(typeface, Typeface.BOLD)
-                    setTextColor(Color.DKGRAY)
+                    setTextColor(PortfolioAppearance.TEXT_SECONDARY)
                     setPadding(dp(12), dp(9), dp(12), dp(9))
                     background = GradientDrawable().apply {
-                        setColor(Color.WHITE)
+                        setColor(PortfolioAppearance.SURFACE)
                         cornerRadius = dp(10).toFloat()
-                        setStroke(dp(1), Color.rgb(230, 230, 230))
+                        setStroke(dp(1), PortfolioAppearance.BORDER)
                     }
                 },
                 LinearLayout.LayoutParams(
@@ -2680,9 +2651,9 @@ class MainActivity : Activity() {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(18), dp(15), dp(18), dp(15))
             background = GradientDrawable().apply {
-                setColor(Color.WHITE)
+                setColor(PortfolioAppearance.SURFACE)
                 cornerRadius = dp(14).toFloat()
-                setStroke(dp(1), Color.rgb(225, 225, 225))
+                setStroke(dp(1), PortfolioAppearance.BORDER)
             }
         }
 
@@ -2691,7 +2662,7 @@ class MainActivity : Activity() {
                 text = asset.name
                 textSize = 19f
                 setTypeface(typeface, Typeface.BOLD)
-                setTextColor(Color.rgb(35, 35, 35))
+                setTextColor(PortfolioAppearance.TEXT_PRIMARY)
                 setOnClickListener { showAssetDialog(index, asset) }
             }
         )
@@ -2708,7 +2679,7 @@ class MainActivity : Activity() {
                     }
                 }
                 textSize = 13f
-                setTextColor(Color.GRAY)
+                setTextColor(PortfolioAppearance.TEXT_SECONDARY)
                 setPadding(0, dp(3), 0, dp(5))
             }
         )
@@ -2717,7 +2688,7 @@ class MainActivity : Activity() {
             TextView(this).apply {
                 text = ui("Quantity: ") + formatQuantity(asset.quantity)
                 textSize = 14f
-                setTextColor(Color.DKGRAY)
+                setTextColor(PortfolioAppearance.TEXT_SECONDARY)
             }
         )
 
@@ -2725,7 +2696,7 @@ class MainActivity : Activity() {
             TextView(this).apply {
                 text = ui("Price: ") + formatToman(asset.price)
                 textSize = 14f
-                setTextColor(Color.DKGRAY)
+                setTextColor(PortfolioAppearance.TEXT_SECONDARY)
             }
         )
 
@@ -2733,7 +2704,7 @@ class MainActivity : Activity() {
             TextView(this).apply {
                 text = ui("Avg. cost: ") + formatToman(asset.averageCost)
                 textSize = 14f
-                setTextColor(Color.DKGRAY)
+                setTextColor(PortfolioAppearance.TEXT_SECONDARY)
             }
         )
 
@@ -2742,7 +2713,7 @@ class MainActivity : Activity() {
                 text = ui("Value: ") + formatToman(asset.value)
                 textSize = 16f
                 setTypeface(typeface, Typeface.BOLD)
-                setTextColor(Color.rgb(45, 45, 45))
+                setTextColor(PortfolioAppearance.TEXT_PRIMARY)
                 setPadding(0, dp(6), 0, dp(2))
             }
         )
@@ -2754,9 +2725,9 @@ class MainActivity : Activity() {
                 setTypeface(typeface, Typeface.BOLD)
                 setTextColor(
                     when {
-                        asset.profit > 0.0 -> Color.rgb(25, 125, 70)
-                        asset.profit < 0.0 -> Color.rgb(180, 45, 45)
-                        else -> Color.DKGRAY
+                        asset.profit > 0.0 -> PortfolioAppearance.SUCCESS
+                        asset.profit < 0.0 -> PortfolioAppearance.ERROR
+                        else -> PortfolioAppearance.TEXT_SECONDARY
                     }
                 )
             }
@@ -2776,7 +2747,7 @@ class MainActivity : Activity() {
                     String.format(Locale.US, ui("Portfolio: %.1f%%  •  Target: Excluded"), allocation)
                 }
                 textSize = 14f
-                setTextColor(Color.GRAY)
+                setTextColor(PortfolioAppearance.TEXT_SECONDARY)
                 setPadding(0, dp(2), 0, dp(2))
             }
         )
@@ -2792,9 +2763,9 @@ class MainActivity : Activity() {
                 textSize = 13f
                 setTextColor(
                     if (!asset.includeInTarget || kotlin.math.abs(gap) <= tolerancePercent) {
-                        Color.rgb(25, 125, 70)
+                        PortfolioAppearance.SUCCESS
                     } else {
-                        Color.rgb(185, 110, 25)
+                        PortfolioAppearance.WARNING
                     }
                 )
                 setPadding(0, 0, 0, dp(3))
@@ -2816,9 +2787,9 @@ class MainActivity : Activity() {
                 setTypeface(typeface, Typeface.BOLD)
                 setTextColor(
                     if ((!asset.includeInTarget || kotlin.math.abs(gap) <= tolerancePercent) && asset.targetPercent > 0.0) {
-                        Color.rgb(25, 125, 70)
+                        PortfolioAppearance.SUCCESS
                     } else {
-                        Color.DKGRAY
+                        PortfolioAppearance.TEXT_SECONDARY
                     }
                 )
                 setPadding(0, 0, 0, dp(8))
@@ -2875,7 +2846,7 @@ class MainActivity : Activity() {
             TextView(this).apply {
                 text = ui("Tap name to edit • Long press card to delete")
                 textSize = 12f
-                setTextColor(Color.GRAY)
+                setTextColor(PortfolioAppearance.TEXT_SECONDARY)
                 setPadding(0, dp(7), 0, 0)
             }
         )
@@ -3024,8 +2995,8 @@ class MainActivity : Activity() {
 
         val container = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(dp(20), dp(24), dp(20), dp(24))
-            setBackgroundColor(Color.rgb(248, 249, 250))
+            setPadding(dp(16), dp(12), dp(16), dp(24))
+            setBackgroundColor(PortfolioAppearance.BACKGROUND)
         }
 
         container.addView(
@@ -3033,7 +3004,7 @@ class MainActivity : Activity() {
                 text = ui("Price Center")
                 textSize = 28f
                 setTypeface(typeface, Typeface.BOLD)
-                setTextColor(Color.rgb(30, 30, 30))
+                setTextColor(PortfolioAppearance.TEXT_PRIMARY)
             }
         )
 
@@ -3041,7 +3012,7 @@ class MainActivity : Activity() {
             TextView(this).apply {
                 text = ui("Update all current prices in one place.")
                 textSize = 14f
-                setTextColor(Color.GRAY)
+                setTextColor(PortfolioAppearance.TEXT_SECONDARY)
                 setPadding(0, dp(6), 0, dp(16))
             }
         )
@@ -3053,9 +3024,9 @@ class MainActivity : Activity() {
                 orientation = LinearLayout.VERTICAL
                 setPadding(dp(14), dp(10), dp(14), dp(10))
                 background = GradientDrawable().apply {
-                    setColor(Color.WHITE)
+                    setColor(PortfolioAppearance.SURFACE)
                     cornerRadius = dp(10).toFloat()
-                    setStroke(dp(1), Color.rgb(230, 230, 230))
+                    setStroke(dp(1), PortfolioAppearance.BORDER)
                 }
             }
 
@@ -3074,7 +3045,7 @@ class MainActivity : Activity() {
                     }
                     textSize = 15f
                     setTypeface(typeface, Typeface.BOLD)
-                    setTextColor(Color.DKGRAY)
+                    setTextColor(PortfolioAppearance.TEXT_SECONDARY)
                 }
             )
 
@@ -3158,8 +3129,9 @@ class MainActivity : Activity() {
             }
         )
 
-        setContentView(
+        showContentRespectingSystemBars(
             ScrollView(this).apply {
+                setBackgroundColor(PortfolioAppearance.BACKGROUND)
                 addView(container)
             }
         )
@@ -3539,7 +3511,7 @@ class MainActivity : Activity() {
                 TextView(this).apply {
                     text = ui("No activity yet.")
                     textSize = 14f
-                    setTextColor(Color.GRAY)
+                    setTextColor(PortfolioAppearance.TEXT_SECONDARY)
                 }
             )
         } else {
@@ -3551,9 +3523,9 @@ class MainActivity : Activity() {
                         orientation = LinearLayout.VERTICAL
                         setPadding(dp(12), dp(10), dp(12), dp(10))
                         background = GradientDrawable().apply {
-                            setColor(Color.WHITE)
+                            setColor(PortfolioAppearance.SURFACE)
                             cornerRadius = dp(10).toFloat()
-                            setStroke(dp(1), Color.rgb(230, 230, 230))
+                            setStroke(dp(1), PortfolioAppearance.BORDER)
                         }
                     }
 
@@ -3561,7 +3533,7 @@ class MainActivity : Activity() {
                         TextView(this).apply {
                             text = transactionDetails(transaction)
                             textSize = 13f
-                            setTextColor(Color.DKGRAY)
+                            setTextColor(PortfolioAppearance.TEXT_SECONDARY)
                         }
                     )
 
@@ -3664,7 +3636,7 @@ class MainActivity : Activity() {
                 TextView(this).apply {
                     text = ui("No portfolio snapshots yet. Save prices in Price Center to create one.")
                     textSize = 14f
-                    setTextColor(Color.GRAY)
+                    setTextColor(PortfolioAppearance.TEXT_SECONDARY)
                 }
             )
         } else {
@@ -3684,12 +3656,12 @@ class MainActivity : Activity() {
                             append(formatDate(snapshot.timestamp))
                         }
                         textSize = 13f
-                        setTextColor(Color.DKGRAY)
+                        setTextColor(PortfolioAppearance.TEXT_SECONDARY)
                         setPadding(dp(12), dp(10), dp(12), dp(10))
                         background = GradientDrawable().apply {
-                            setColor(Color.WHITE)
+                            setColor(PortfolioAppearance.SURFACE)
                             cornerRadius = dp(10).toFloat()
-                            setStroke(dp(1), Color.rgb(230, 230, 230))
+                            setStroke(dp(1), PortfolioAppearance.BORDER)
                         }
                     },
                     LinearLayout.LayoutParams(
@@ -5405,7 +5377,7 @@ class MainActivity : Activity() {
                 text = ui("Recent Activity")
                 textSize = 21f
                 setTypeface(typeface, Typeface.BOLD)
-                setTextColor(Color.rgb(35, 35, 35))
+                setTextColor(PortfolioAppearance.TEXT_PRIMARY)
                 setPadding(0, dp(28), 0, dp(10))
             }
         )
@@ -5415,7 +5387,7 @@ class MainActivity : Activity() {
                 TextView(this).apply {
                     text = ui("No buy or sell transactions yet.")
                     textSize = 14f
-                    setTextColor(Color.GRAY)
+                    setTextColor(PortfolioAppearance.TEXT_SECONDARY)
                     setPadding(0, 0, 0, dp(12))
                 }
             )
@@ -5429,12 +5401,12 @@ class MainActivity : Activity() {
                 TextView(this).apply {
                     text = details
                     textSize = 13f
-                    setTextColor(Color.DKGRAY)
+                    setTextColor(PortfolioAppearance.TEXT_SECONDARY)
                     setPadding(dp(12), dp(10), dp(12), dp(10))
                     background = GradientDrawable().apply {
-                        setColor(Color.WHITE)
+                        setColor(PortfolioAppearance.SURFACE)
                         cornerRadius = dp(10).toFloat()
-                        setStroke(dp(1), Color.rgb(230, 230, 230))
+                        setStroke(dp(1), PortfolioAppearance.BORDER)
                     }
                 },
                 LinearLayout.LayoutParams(
@@ -5469,7 +5441,7 @@ class MainActivity : Activity() {
         if (onPriceCenterScreen) {
             showPortfolioScreen()
         } else if (onPortfolioScreen) {
-            showWelcomeScreen()
+            finish()
         } else {
             super.onBackPressed()
         }

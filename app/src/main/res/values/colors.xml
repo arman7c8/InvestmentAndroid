@@ -1,0 +1,6 @@
+<resources>
+    <color name="investment_background">#0B1424</color>
+    <color name="investment_accent">#61D9C7</color>
+    <color name="investment_button">#235B68</color>
+    <color name="investment_primary_text">#F3F7FC</color>
+</resources>
