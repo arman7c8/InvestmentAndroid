@@ -2801,11 +2801,11 @@ class MainActivity : Activity() {
         card.addView(
             TextView(this).apply {
                 text = when {
-                    !asset.includeInTarget -> "Rebalance: Excluded from target"
-                    asset.targetPercent <= 0.0 -> "Rebalance: No target set"
-                    kotlin.math.abs(gap) <= tolerancePercent -> "Rebalance: On target"
-                    rebalanceAmount > 0.0 -> "Rebalance: Buy about " + formatToman(rebalanceAmount)
-                    else -> "Rebalance: Sell about " + formatToman(kotlin.math.abs(rebalanceAmount))
+                    !asset.includeInTarget -> ui("Rebalance: Excluded from target")
+                    asset.targetPercent <= 0.0 -> ui("Rebalance: No target set")
+                    kotlin.math.abs(gap) <= tolerancePercent -> ui("Rebalance: On target")
+                    rebalanceAmount > 0.0 -> ui("Rebalance: Buy about ") + formatToman(rebalanceAmount)
+                    else -> ui("Rebalance: Sell about ") + formatToman(kotlin.math.abs(rebalanceAmount))
                 }
                 textSize = 13f
                 setTypeface(typeface, Typeface.BOLD)
@@ -4577,6 +4577,7 @@ class MainActivity : Activity() {
             return
         }
 
+        val expectedLocalFingerprint = sharedFingerprint(buildSharedPortfolio())
         runStorageOperation(
             label = "Loading cloud data",
             task = {
@@ -4587,7 +4588,7 @@ class MainActivity : Activity() {
                 }
                 raw
             },
-            onSuccess = ::applyCloudRaw,
+            onSuccess = { raw -> applyCloudRaw(raw, expectedLocalFingerprint) },
             onFailure = { error ->
                 showCloudAccessError(
                     "Cloud Load Failed",
@@ -5060,6 +5061,7 @@ class MainActivity : Activity() {
                 }
 
                 importBackupRequestCode -> {
+                    val expectedLocalFingerprint = sharedFingerprint(buildSharedPortfolio())
                     runStorageOperation(
                         label = "Validating backup",
                         task = {
@@ -5069,6 +5071,9 @@ class MainActivity : Activity() {
                         },
                         onSuccess = { raw ->
                             try {
+                                check(sharedFingerprint(buildSharedPortfolio()) == expectedLocalFingerprint) {
+                                    "Phone data changed while the file was being read. Nothing was overwritten."
+                                }
                                 restoreBackupJson(raw)
                                 Toast.makeText(this, "Backup restored safely.", Toast.LENGTH_SHORT).show()
                                 showPortfolioScreen()
