@@ -1260,7 +1260,7 @@ class MainActivity : Activity() {
         container.addView(
             TextView(this).apply {
                 text = ui("My Portfolio")
-                textSize = 28f
+                textSize = DashboardPresentation.titleSizeSp(uiLanguage() == "fa")
                 setTypeface(typeface, Typeface.BOLD)
                 setTextColor(PortfolioAppearance.TEXT_PRIMARY)
             }
@@ -1279,27 +1279,28 @@ class MainActivity : Activity() {
         )
 
         addCloudSyncCard(container)
-        addCategorySummary(container, assets, totalValue)
-        addPeriodSummary(container, loadSummaryPeriod())
 
-
-
-        if (assets.isEmpty()) {
+        if (!DashboardPresentation.hasAssets(assets.size)) {
             container.addView(
                 TextView(this).apply {
                     text = ui("No assets yet. Tap Add Asset to create your first one.")
-                    textSize = 16f
+                    textSize = 14f
                     setTextColor(PortfolioAppearance.TEXT_SECONDARY)
-                    setPadding(0, dp(14), 0, dp(22))
+                    setPadding(0, dp(12), 0, dp(2))
                 }
             )
         } else {
+            addCategorySummary(container, assets, totalValue)
+            addPeriodSummary(container, loadSummaryPeriod())
             addGroupedHoldings(
                 parent = container,
                 assets = assets,
                 totalValue = totalValue,
                 targetPortfolioValue = targetPortfolioValue,
                 tolerance = tolerance
+            )
+            addRebalanceSummary(
+                container, targetAssets, targetPortfolioValue, totalTarget, tolerance
             )
         }
 
@@ -1412,18 +1413,16 @@ class MainActivity : Activity() {
             ViewGroup.LayoutParams.MATCH_PARENT,
             ViewGroup.LayoutParams.WRAP_CONTENT
         ).apply {
-            topMargin = dp(10)
+            topMargin = dp(8)
         }
-
-        addRebalanceSummary(container, targetAssets, targetPortfolioValue, totalTarget, tolerance)
 
         container.addView(
             TextView(this).apply {
                 text = ui("Quick Actions")
-                textSize = 19f
+                textSize = 18f
                 setTypeface(typeface, Typeface.BOLD)
                 setTextColor(PortfolioAppearance.TEXT_PRIMARY)
-                setPadding(0, dp(22), 0, dp(6))
+                setPadding(0, dp(13), 0, dp(4))
             }
         )
 
@@ -1491,6 +1490,8 @@ class MainActivity : Activity() {
         showContentRespectingSystemBars(
             ScrollView(this).apply {
                 setBackgroundColor(PortfolioAppearance.BACKGROUND)
+                isVerticalScrollBarEnabled = false
+                isHorizontalScrollBarEnabled = false
                 addView(container)
             }
         )
@@ -1525,7 +1526,7 @@ class MainActivity : Activity() {
 
         val card = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(dp(16), dp(13), dp(16), dp(13))
+            setPadding(dp(14), dp(10), dp(14), dp(10))
             background = GradientDrawable().apply {
                 setColor(PortfolioAppearance.SURFACE)
                 cornerRadius = dp(14).toFloat()
@@ -1610,7 +1611,7 @@ class MainActivity : Activity() {
                 ViewGroup.LayoutParams.WRAP_CONTENT
             ).apply {
                 topMargin = dp(4)
-                bottomMargin = dp(8)
+                bottomMargin = dp(6)
             }
         )
     }
@@ -1642,7 +1643,7 @@ class MainActivity : Activity() {
 
         val card = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(dp(18), dp(16), dp(18), dp(16))
+            setPadding(dp(16), dp(14), dp(16), dp(14))
             background = GradientDrawable(
                 GradientDrawable.Orientation.TL_BR,
                 intArrayOf(PortfolioAppearance.HERO_START, PortfolioAppearance.HERO_END)
@@ -1663,7 +1664,7 @@ class MainActivity : Activity() {
         card.addView(
             TextView(this).apply {
                 text = formatToman(totalValue)
-                textSize = 27f
+                textSize = 26f
                 setTypeface(typeface, Typeface.BOLD)
                 setTextColor(PortfolioAppearance.TEXT_PRIMARY)
                 setPadding(0, dp(2), 0, dp(10))
@@ -1711,6 +1712,7 @@ class MainActivity : Activity() {
             )
         }
 
+        if (DashboardPresentation.hasAssets(assets.size)) {
         val lastPriceUpdate = loadLastPriceUpdate()
         card.addView(
             TextView(this).apply {
@@ -1744,9 +1746,10 @@ class MainActivity : Activity() {
                         else -> PortfolioAppearance.WARNING
                     }
                 )
-                setPadding(0, dp(9), 0, 0)
+                setPadding(0, dp(7), 0, 0)
             }
         )
+        }
 
         parent.addView(
             card,
@@ -1754,8 +1757,8 @@ class MainActivity : Activity() {
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.WRAP_CONTENT
             ).apply {
-                topMargin = dp(18)
-                bottomMargin = dp(8)
+                topMargin = dp(12)
+                bottomMargin = dp(4)
             }
         )
     }
@@ -1768,7 +1771,7 @@ class MainActivity : Activity() {
         parent.addView(
             TextView(this).apply {
                 text = ui("Category Breakdown")
-                textSize = 19f
+                textSize = 18f
                 setTypeface(typeface, Typeface.BOLD)
                 setTextColor(PortfolioAppearance.TEXT_PRIMARY)
                 setPadding(0, dp(14), 0, dp(6))
@@ -1959,8 +1962,8 @@ class MainActivity : Activity() {
 
         parent.addView(
             TextView(this).apply {
-                text = ui(period) + ui(" Summary")
-                textSize = 19f
+                text = DashboardPresentation.summaryHeading(period, uiLanguage())
+                textSize = 18f
                 setTypeface(typeface, Typeface.BOLD)
                 setTextColor(PortfolioAppearance.TEXT_PRIMARY)
                 setPadding(0, dp(12), 0, dp(6))
@@ -2401,10 +2404,10 @@ class MainActivity : Activity() {
         parent.addView(
             TextView(this).apply {
                 text = ui("Rebalance Summary")
-                textSize = 21f
+                textSize = 18f
                 setTypeface(typeface, Typeface.BOLD)
                 setTextColor(PortfolioAppearance.TEXT_PRIMARY)
-                setPadding(0, dp(22), 0, dp(8))
+                setPadding(0, dp(14), 0, dp(6))
             }
         )
 
@@ -3132,6 +3135,8 @@ class MainActivity : Activity() {
         showContentRespectingSystemBars(
             ScrollView(this).apply {
                 setBackgroundColor(PortfolioAppearance.BACKGROUND)
+                isVerticalScrollBarEnabled = false
+                isHorizontalScrollBarEnabled = false
                 addView(container)
             }
         )
