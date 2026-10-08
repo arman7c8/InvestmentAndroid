@@ -365,7 +365,7 @@ class MainActivity : Activity() {
     private fun undoLastChange() {
         val undo = loadStateStack(undoStackKey)
         if (undo.isEmpty()) {
-            Toast.makeText(this, "Nothing to undo.", Toast.LENGTH_SHORT).show()
+            Toast.makeText(this, ui("Nothing to undo."), Toast.LENGTH_SHORT).show()
             return
         }
 
@@ -377,13 +377,13 @@ class MainActivity : Activity() {
         saveStateStack(redoStackKey, redo)
         restorePortfolioState(previous)
         showPortfolioScreen()
-        Toast.makeText(this, "Change undone.", Toast.LENGTH_SHORT).show()
+        Toast.makeText(this, ui("Change undone."), Toast.LENGTH_SHORT).show()
     }
 
     private fun redoLastChange() {
         val redo = loadStateStack(redoStackKey)
         if (redo.isEmpty()) {
-            Toast.makeText(this, "Nothing to redo.", Toast.LENGTH_SHORT).show()
+            Toast.makeText(this, ui("Nothing to redo."), Toast.LENGTH_SHORT).show()
             return
         }
 
@@ -395,7 +395,7 @@ class MainActivity : Activity() {
         saveStateStack(redoStackKey, redo)
         restorePortfolioState(next)
         showPortfolioScreen()
-        Toast.makeText(this, "Change restored.", Toast.LENGTH_SHORT).show()
+        Toast.makeText(this, ui("Change restored."), Toast.LENGTH_SHORT).show()
     }
 
     private fun loadAssets(): MutableList<Asset> {
@@ -1035,7 +1035,7 @@ class MainActivity : Activity() {
                     dialog.dismiss()
                     showWelcomeScreen()
                 } else {
-                    input.error = "Incorrect PIN"
+                    input.error = ui("Incorrect PIN")
                     input.selectAll()
                 }
             }
@@ -1072,13 +1072,13 @@ class MainActivity : Activity() {
 
                 when {
                     value.length !in 4..8 || value.any { !it.isDigit() } ->
-                        pin.error = "PIN must contain 4–8 digits"
+                        pin.error = ui("PIN must contain 4–8 digits")
                     value != confirmation ->
-                        confirm.error = "PINs do not match"
+                        confirm.error = ui("PINs do not match")
                     else -> {
                         savePin(value)
                         dialog.dismiss()
-                        Toast.makeText(this, "App lock enabled.", Toast.LENGTH_SHORT).show()
+                        Toast.makeText(this, ui("App lock enabled."), Toast.LENGTH_SHORT).show()
                         afterSave?.invoke()
                     }
                 }
@@ -1103,7 +1103,7 @@ class MainActivity : Activity() {
                     dialog.dismiss()
                     action()
                 } else {
-                    input.error = "Incorrect PIN"
+                    input.error = ui("Incorrect PIN")
                     input.selectAll()
                 }
             }
@@ -1121,12 +1121,12 @@ class MainActivity : Activity() {
         AlertDialog.Builder(this)
             .setTitle(ui("App Lock"))
             .setMessage(ui("App lock is enabled."))
-            .setItems(arrayOf("Change PIN", "Remove App Lock")) { _, which ->
+            .setItems(arrayOf(ui("Change PIN"), ui("Remove App Lock"))) { _, which ->
                 when (which) {
                     0 -> verifyCurrentPinThen { showSetPinDialog() }
                     1 -> verifyCurrentPinThen {
                         removePin()
-                        Toast.makeText(this, "App lock removed.", Toast.LENGTH_SHORT).show()
+                        Toast.makeText(this, ui("App lock removed."), Toast.LENGTH_SHORT).show()
                     }
                 }
             }
@@ -2071,9 +2071,9 @@ class MainActivity : Activity() {
                 val categories = loadCategories()
 
                 when {
-                    name.isBlank() -> input.error = "Enter a category name"
+                    name.isBlank() -> input.error = ui("Enter a category name")
                     categories.any { it.equals(name, ignoreCase = true) } ->
-                        input.error = "Category already exists"
+                        input.error = ui("Category already exists")
                     else -> {
                         pushUndoCheckpoint()
                         categories.add(name)
@@ -2091,7 +2091,7 @@ class MainActivity : Activity() {
     private fun showCustomCategoryActions(category: String) {
         AlertDialog.Builder(this)
             .setTitle(category)
-            .setItems(arrayOf("Rename", "Delete")) { _, which ->
+            .setItems(arrayOf(ui("Rename"), ui("Delete"))) { _, which ->
                 if (which == 0) {
                     showRenameCategoryDialog(category)
                 } else {
@@ -2123,11 +2123,11 @@ class MainActivity : Activity() {
                 val categories = loadCategories()
 
                 when {
-                    newName.isBlank() -> input.error = "Enter a category name"
+                    newName.isBlank() -> input.error = ui("Enter a category name")
                     categories.any {
                         !it.equals(oldName, ignoreCase = true) &&
                             it.equals(newName, ignoreCase = true)
-                    } -> input.error = "Category already exists"
+                    } -> input.error = ui("Category already exists")
                     newName == oldName -> dialog.dismiss()
                     else -> {
                         val assets = loadAssets()
@@ -2291,7 +2291,7 @@ class MainActivity : Activity() {
         val assets = loadAssets()
         val targetEntries = assets.withIndex().filter { it.value.includeInTarget }
         if (targetEntries.isEmpty()) {
-            Toast.makeText(this, "No assets are included in target allocation.", Toast.LENGTH_SHORT).show()
+            Toast.makeText(this, ui("No assets are included in target allocation."), Toast.LENGTH_SHORT).show()
             return
         }
 
@@ -2344,7 +2344,7 @@ class MainActivity : Activity() {
                 inputs.forEach { (index, input) ->
                     val value = input.text.toString().trim().replace(",", "").toDoubleOrNull()
                     if (value == null || !value.isFinite() || value < 0.0 || value > 100.0) {
-                        input.error = "Enter 0 to 100"
+                        input.error = ui("Enter 0 to 100")
                         invalid = true
                     } else {
                         updatedTargets[index] = value
@@ -2403,7 +2403,7 @@ class MainActivity : Activity() {
                 val value = input.text.toString().trim().replace(",", "").toDoubleOrNull()
 
                 if (value == null || !value.isFinite() || value < 0.0 || value > 20.0) {
-                    input.error = "Enter a value from 0 to 20"
+                    input.error = ui("Enter a value from 0 to 20")
                     return@setOnClickListener
                 }
 
@@ -2610,19 +2610,19 @@ class MainActivity : Activity() {
                 val symbol = symbolInput.text.toString().trim().uppercase(Locale.US)
 
                 when {
-                    name.isEmpty() -> nameInput.error = "Enter an asset name"
+                    name.isEmpty() -> nameInput.error = ui("Enter an asset name")
                     quantity == null || !quantity.isFinite() || quantity <= 0.0 ->
-                        quantityInput.error = "Enter a quantity greater than zero"
+                        quantityInput.error = ui("Enter a quantity greater than zero")
                     price == null || !price.isFinite() || price < 0.0 ->
-                        priceInput.error = "Enter a valid current price"
+                        priceInput.error = ui("Enter a valid current price")
                     averageCost == null || !averageCost.isFinite() || averageCost < 0.0 ->
-                        averageCostInput.error = "Enter a valid average cost"
+                        averageCostInput.error = ui("Enter a valid average cost")
                     targetPercent == null || !targetPercent.isFinite() || targetPercent < 0.0 || targetPercent > 100.0 ->
-                        targetInput.error = "Target must be between 0 and 100"
+                        targetInput.error = ui("Target must be between 0 and 100")
                     priceSource == "Nobitex" && symbol.isBlank() ->
-                        symbolInput.error = "Enter a Nobitex market symbol"
+                        symbolInput.error = ui("Enter a Nobitex market symbol")
                     priceSource == "Nobitex" && category != "Crypto" ->
-                        symbolInput.error = "Nobitex source is currently for Crypto assets"
+                        symbolInput.error = ui("Nobitex source is currently for Crypto assets")
                     else -> {
                         val assets = loadAssets()
                         val updated = (existing ?: Asset(
@@ -2927,11 +2927,11 @@ class MainActivity : Activity() {
 
                 when {
                     quantity == null || !quantity.isFinite() || quantity <= 0.0 ->
-                        quantityInput.error = "Enter a quantity greater than zero"
+                        quantityInput.error = ui("Enter a quantity greater than zero")
                     transactionPrice == null || !transactionPrice.isFinite() || transactionPrice < 0.0 ->
-                        priceInput.error = "Enter a valid transaction price"
+                        priceInput.error = ui("Enter a valid transaction price")
                     !isBuy && quantity > asset.quantity ->
-                        quantityInput.error = "You only own " + formatQuantity(asset.quantity)
+                        quantityInput.error = ui("You only own ") + formatQuantity(asset.quantity)
                     else -> {
                         val assets = loadAssets()
                         if (index !in assets.indices) {
@@ -3105,7 +3105,7 @@ class MainActivity : Activity() {
                 inputs.forEach { (index, input) ->
                     val value = input.text.toString().trim().replace(",", "").toDoubleOrNull()
                     if (value == null || !value.isFinite() || value < 0.0) {
-                        input.error = "Enter a valid price"
+                        input.error = ui("Enter a valid price")
                         invalid = true
                     } else if (index in updatedAssets.indices) {
                         updatedAssets[index] = updatedAssets[index].copy(price = value)
@@ -3203,7 +3203,7 @@ class MainActivity : Activity() {
             if (showResult) {
                 Toast.makeText(
                     this,
-                    "A price, backup, or cloud operation is already running.",
+                    ui("A price, backup, or cloud operation is already running."),
                     Toast.LENGTH_SHORT
                 ).show()
             }
@@ -3211,7 +3211,7 @@ class MainActivity : Activity() {
         }
 
         if (showResult) {
-            Toast.makeText(this, "Updating Nobitex prices...", Toast.LENGTH_SHORT).show()
+            Toast.makeText(this, ui("Updating Nobitex prices..."), Toast.LENGTH_SHORT).show()
         }
 
         Thread {
@@ -3374,7 +3374,7 @@ class MainActivity : Activity() {
             dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
                 val finalBalance = input.text.toString().trim().replace(",", "").toDoubleOrNull()
                 if (finalBalance == null || !finalBalance.isFinite() || finalBalance < 0.0) {
-                    input.error = "Enter a valid balance"
+                    input.error = ui("Enter a valid balance")
                     return@setOnClickListener
                 }
 
@@ -3516,7 +3516,7 @@ class MainActivity : Activity() {
         saveTransactions(transactions)
         recordSnapshot(assets)
         showPortfolioScreen()
-        Toast.makeText(this, "Transaction reverted.", Toast.LENGTH_SHORT).show()
+        Toast.makeText(this, ui("Transaction reverted."), Toast.LENGTH_SHORT).show()
     }
 
     private fun showActivityDialog(page: Int = 0) {
@@ -3870,7 +3870,7 @@ class MainActivity : Activity() {
                                 .remove(cloudLastAutoCheckKey)
                                 .apply()
                             stopSmartCloudSync()
-                            Toast.makeText(this, "Cloud backup disconnected.", Toast.LENGTH_SHORT).show()
+                            Toast.makeText(this, ui("Cloud backup disconnected."), Toast.LENGTH_SHORT).show()
                         }
                         7 -> recoverPreviousCloudFile()
                     }
@@ -3910,7 +3910,7 @@ class MainActivity : Activity() {
                 dialog.dismiss()
                 Toast.makeText(
                     this,
-                    "Smart sync set to every " + values[which] + " minutes.",
+                    ui("Smart sync set to every ") + values[which] + " minutes.",
                     Toast.LENGTH_SHORT
                 ).show()
                 if (onPortfolioScreen) {
@@ -4170,13 +4170,13 @@ class MainActivity : Activity() {
     ) {
         if (priceUpdateInProgress.get() || !cloudOperationInProgress.compareAndSet(false, true)) {
             if (showWorking) {
-                Toast.makeText(this, "Another backup or sync operation is still running.", Toast.LENGTH_SHORT).show()
+                Toast.makeText(this, ui("Another backup or sync operation is still running."), Toast.LENGTH_SHORT).show()
             }
             return
         }
 
         if (showWorking) {
-            Toast.makeText(this, "$label…", Toast.LENGTH_SHORT).show()
+            Toast.makeText(this, ui("$label…"), Toast.LENGTH_SHORT).show()
         }
 
         try {
@@ -4552,13 +4552,13 @@ class MainActivity : Activity() {
                     CloudSyncAction.MATCH -> {
                         result.remote?.let(::saveCloudBaseline)
                         markCloudSync()
-                        Toast.makeText(this, "Phone and Cloud already match.", Toast.LENGTH_SHORT).show()
+                        Toast.makeText(this, ui("Phone and Cloud already match."), Toast.LENGTH_SHORT).show()
                         if (onPortfolioScreen) showPortfolioScreen()
                     }
                     CloudSyncAction.UPLOADED -> {
                         result.savedPortfolio?.let(::saveCloudBaseline)
                         markCloudSync()
-                        Toast.makeText(this, "Cloud backup updated safely.", Toast.LENGTH_SHORT).show()
+                        Toast.makeText(this, ui("Cloud backup updated safely."), Toast.LENGTH_SHORT).show()
                         if (onPortfolioScreen) showPortfolioScreen()
                     }
                     CloudSyncAction.LOAD_REMOTE -> {
@@ -4656,7 +4656,7 @@ class MainActivity : Activity() {
             restoreBackupJson(raw, mergeLocalHistory = true)
             validated.sharedPortfolio?.let(::saveCloudBaseline)
             markCloudSync()
-            Toast.makeText(this, "Cloud backup loaded safely.", Toast.LENGTH_SHORT).show()
+            Toast.makeText(this, ui("Cloud backup loaded safely."), Toast.LENGTH_SHORT).show()
             showPortfolioScreen()
         } catch (error: Exception) {
             showCloudAccessError(
@@ -4688,7 +4688,7 @@ class MainActivity : Activity() {
                             try {
                                 pushUndoCheckpoint()
                                 restorePreviousLocalState()
-                                Toast.makeText(this, "Previous local data restored.", Toast.LENGTH_SHORT).show()
+                                Toast.makeText(this, ui("Previous local data restored."), Toast.LENGTH_SHORT).show()
                                 showPortfolioScreen()
                             } catch (error: Exception) {
                                 AlertDialog.Builder(this)
@@ -5068,7 +5068,7 @@ class MainActivity : Activity() {
             ) {
                 Toast.makeText(
                     this,
-                    "No cloud file selected. Cloud remains disconnected.",
+                    ui("No cloud file selected. Cloud remains disconnected."),
                     Toast.LENGTH_LONG
                 ).show()
             }
@@ -5080,7 +5080,7 @@ class MainActivity : Activity() {
                 requestCode == createCloudBackupRequestCode ||
                 requestCode == connectCloudBackupRequestCode
             ) {
-                Toast.makeText(this, "No file was returned by Android.", Toast.LENGTH_LONG).show()
+                Toast.makeText(this, ui("No file was returned by Android."), Toast.LENGTH_LONG).show()
             }
             return
         }
@@ -5095,7 +5095,7 @@ class MainActivity : Activity() {
                             Unit
                         },
                         onSuccess = {
-                            Toast.makeText(this, "Backup exported safely.", Toast.LENGTH_SHORT).show()
+                            Toast.makeText(this, ui("Backup exported safely."), Toast.LENGTH_SHORT).show()
                         },
                         onFailure = { error -> showBackupFileError(error) }
                     )
@@ -5116,7 +5116,7 @@ class MainActivity : Activity() {
                                     "Phone data changed while the file was being read. Nothing was overwritten."
                                 }
                                 restoreBackupJson(raw)
-                                Toast.makeText(this, "Backup restored safely.", Toast.LENGTH_SHORT).show()
+                                Toast.makeText(this, ui("Backup restored safely."), Toast.LENGTH_SHORT).show()
                                 showPortfolioScreen()
                             } catch (error: Exception) {
                                 showBackupFileError(error)
@@ -5139,7 +5139,7 @@ class MainActivity : Activity() {
                             saveCloudBackupUri(uri)
                             saveCloudBaseline(document.getJSONObject("sharedPortfolio"))
                             markCloudSync()
-                            Toast.makeText(this, "Cloud backup connected and saved.", Toast.LENGTH_SHORT).show()
+                            Toast.makeText(this, ui("Cloud backup connected and saved."), Toast.LENGTH_SHORT).show()
                             scheduleSmartCloudSync()
                             if (onPortfolioScreen) showPortfolioScreen()
                         },
