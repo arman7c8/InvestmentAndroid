@@ -4542,10 +4542,11 @@ class MainActivity : Activity() {
                 val document = mergedBackupDocument(existingRaw)
                 preserveCloudBeforeWrite(uri, existingRaw)
                 val writtenRaw = document.toString(2)
-                writeUriText(uri, writtenRaw)
-                check(readUriText(uri) == writtenRaw) {
-                    "Cloud provider did not confirm the complete backup. The previous valid copy is available for recovery."
-                }
+                PortfolioSafety.writeAndVerifyBackup(
+                    writtenRaw,
+                    write = { writeUriText(uri, it) },
+                    read = { readUriText(uri) }
+                )
                 CloudSyncResult(
                     action = CloudSyncAction.UPLOADED,
                     savedPortfolio = document.getJSONObject("sharedPortfolio")

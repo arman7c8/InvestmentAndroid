@@ -37,6 +37,18 @@ object PortfolioSafety {
         val incomingAssetCount: Int
     )
 
+    /** A provider write is successful only when the same complete bytes can be read back. */
+    fun writeAndVerifyBackup(
+        expected: String,
+        write: (String) -> Unit,
+        read: () -> String
+    ) {
+        write(expected)
+        check(read() == expected) {
+            "Cloud provider did not confirm the complete backup. The previous valid copy is available for recovery."
+        }
+    }
+
     fun validateBackup(raw: String): ValidatedBackup {
         require(raw.isNotBlank()) { "Backup file is empty. Local data was not changed." }
         val root = try {

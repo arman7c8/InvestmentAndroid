@@ -39,6 +39,40 @@ class PortfolioSafetyTest {
     }
 
     @Test
+    fun completedProviderWriteMustReadBackExactly() {
+        var stored = "old"
+        PortfolioSafety.writeAndVerifyBackup("new backup", { stored = it }, { stored })
+        assertEquals("new backup", stored)
+    }
+
+    @Test
+    fun shortProviderWriteIsNotAccepted() {
+        var stored = "old"
+        assertThrows(IllegalStateException::class.java) {
+            PortfolioSafety.writeAndVerifyBackup("complete backup",
+                write = { stored = it.take(4) }, read = { stored })
+        }
+    }
+
+    @Test
+    fun staleProviderReadIsNotAccepted() {
+        var stored = "previous valid backup"
+        assertThrows(IllegalStateException::class.java) {
+            PortfolioSafety.writeAndVerifyBackup("new complete backup",
+                write = { _ -> Unit }, read = { stored })
+        }
+        assertEquals("previous valid backup", stored)
+    }
+
+    @Test
+    fun providerWriteFailureIsNotReportedAsSuccess() {
+        assertThrows(IllegalStateException::class.java) {
+            PortfolioSafety.writeAndVerifyBackup("backup",
+                write = { throw IllegalStateException("provider failed") }, read = { "backup" })
+        }
+    }
+
+    @Test
     fun validSharedPortfolioIsAccepted() {
         val validated = PortfolioSafety.validateBackup(sharedDocument().toString())
 
