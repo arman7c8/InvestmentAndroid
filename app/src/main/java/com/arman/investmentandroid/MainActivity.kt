@@ -3517,8 +3517,12 @@ class MainActivity : Activity() {
         Toast.makeText(this, "Transaction reverted.", Toast.LENGTH_SHORT).show()
     }
 
-    private fun showActivityDialog() {
+    private fun showActivityDialog(page: Int = 0) {
         val transactions = loadTransactions()
+        val ordered = transactions.sortedByDescending { it.timestamp }
+        val pageSize = 100
+        val pageCount = ((ordered.size + pageSize - 1) / pageSize).coerceAtLeast(1)
+        val currentPage = page.coerceIn(0, pageCount - 1)
         val assets = loadAssets()
         val content = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
@@ -3534,8 +3538,9 @@ class MainActivity : Activity() {
                 }
             )
         } else {
-            transactions
-                .sortedByDescending { it.timestamp }
+            ordered
+                .drop(currentPage * pageSize)
+                .take(pageSize)
                 .forEach { transaction ->
                     val card = LinearLayout(this).apply {
                         orientation = LinearLayout.VERTICAL
@@ -3595,6 +3600,40 @@ class MainActivity : Activity() {
                         }
                     )
                 }
+            if (pageCount > 1) {
+                content.addView(TextView(this).apply {
+                    text = String.format(
+                        Locale.US, ui("Page %d of %d • %d saved transactions"),
+                        currentPage + 1, pageCount, ordered.size
+                    )
+                    gravity = Gravity.CENTER
+                })
+                val navigation = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+                lateinit var activityDialog: AlertDialog
+                for ((label, nextPage) in listOf(
+                    ui("Newer") to currentPage - 1,
+                    ui("Older") to currentPage + 1
+                )) {
+                    navigation.addView(Button(this).apply {
+                        text = label
+                        isAllCaps = false
+                        isEnabled = nextPage in 0 until pageCount
+                        setOnClickListener {
+                            activityDialog.dismiss()
+                            showActivityDialog(nextPage)
+                        }
+                    }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+                }
+                content.addView(navigation)
+                val dialog = AlertDialog.Builder(this)
+                    .setTitle(ui("Activity Manager"))
+                    .setView(ScrollView(this).apply { addView(content) })
+                    .setPositiveButton(ui("Close"), null)
+                    .create()
+                activityDialog = dialog
+                dialog.show()
+                return
+            }
         }
 
         AlertDialog.Builder(this)
