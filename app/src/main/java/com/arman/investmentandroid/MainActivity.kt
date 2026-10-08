@@ -2342,7 +2342,7 @@ class MainActivity : Activity() {
                 var invalid = false
 
                 inputs.forEach { (index, input) ->
-                    val value = input.text.toString().trim().replace(",", "").toDoubleOrNull()
+                    val value = UiText.parseUserNumber(input.text.toString().trim().replace(",", ""))
                     if (value == null || !value.isFinite() || value < 0.0 || value > 100.0) {
                         input.error = ui("Enter 0 to 100")
                         invalid = true
@@ -2400,7 +2400,7 @@ class MainActivity : Activity() {
 
         dialog.setOnShowListener {
             dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
-                val value = input.text.toString().trim().replace(",", "").toDoubleOrNull()
+                val value = UiText.parseUserNumber(input.text.toString().trim().replace(",", ""))
 
                 if (value == null || !value.isFinite() || value < 0.0 || value > 20.0) {
                     input.error = ui("Enter a value from 0 to 20")
@@ -2591,21 +2591,21 @@ class MainActivity : Activity() {
 
         val isEditing = index != null && existing != null
         val dialog = AlertDialog.Builder(this)
-            .setTitle(if (isEditing) "Edit Asset" else "Add Asset")
+            .setTitle(ui(if (isEditing) "Edit Asset" else "Add Asset"))
             .setView(form)
             .setNegativeButton(ui("Cancel"), null)
-            .setPositiveButton(if (isEditing) "Save" else "Add", null)
+            .setPositiveButton(ui(if (isEditing) "Save" else "Add"), null)
             .create()
 
         dialog.setOnShowListener {
             dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
                 val name = nameInput.text.toString().trim()
                 val category = availableCategories[categorySpinner.selectedItemPosition]
-                val quantity = quantityInput.text.toString().trim().replace(",", "").toDoubleOrNull()
-                val price = priceInput.text.toString().trim().replace(",", "").toDoubleOrNull()
+                val quantity = UiText.parseUserNumber(quantityInput.text.toString().trim().replace(",", ""))
+                val price = UiText.parseUserNumber(priceInput.text.toString().trim().replace(",", ""))
                 val averageCostText = averageCostInput.text.toString().trim().replace(",", "")
-                val averageCost = if (averageCostText.isBlank()) price else averageCostText.toDoubleOrNull()
-                val targetPercent = targetInput.text.toString().trim().replace(",", "").toDoubleOrNull()
+                val averageCost = if (averageCostText.isBlank()) price else UiText.parseUserNumber(averageCostText)
+                val targetPercent = UiText.parseUserNumber(targetInput.text.toString().trim().replace(",", ""))
                 val priceSource = priceSources[priceSourceSpinner.selectedItemPosition]
                 val symbol = symbolInput.text.toString().trim().uppercase(Locale.US)
 
@@ -2922,8 +2922,8 @@ class MainActivity : Activity() {
 
         dialog.setOnShowListener {
             dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
-                val quantity = quantityInput.text.toString().trim().replace(",", "").toDoubleOrNull()
-                val transactionPrice = priceInput.text.toString().trim().replace(",", "").toDoubleOrNull()
+                val quantity = UiText.parseUserNumber(quantityInput.text.toString().trim().replace(",", ""))
+                val transactionPrice = UiText.parseUserNumber(priceInput.text.toString().trim().replace(",", ""))
 
                 when {
                     quantity == null || !quantity.isFinite() || quantity <= 0.0 ->
@@ -3103,7 +3103,7 @@ class MainActivity : Activity() {
                 var invalid = false
 
                 inputs.forEach { (index, input) ->
-                    val value = input.text.toString().trim().replace(",", "").toDoubleOrNull()
+                    val value = UiText.parseUserNumber(input.text.toString().trim().replace(",", ""))
                     if (value == null || !value.isFinite() || value < 0.0) {
                         input.error = ui("Enter a valid price")
                         invalid = true
@@ -3117,7 +3117,7 @@ class MainActivity : Activity() {
                     saveAssets(updatedAssets)
                     recordSnapshot(updatedAssets)
                     markPriceUpdate()
-                    Toast.makeText(this@MainActivity, "All prices updated.", Toast.LENGTH_SHORT).show()
+                    Toast.makeText(this@MainActivity, ui("All prices updated."), Toast.LENGTH_SHORT).show()
                     showPortfolioScreen()
                 }
             }
@@ -3345,7 +3345,7 @@ class MainActivity : Activity() {
                     if (showResult) {
                         AlertDialog.Builder(this)
                             .setTitle(ui("Nobitex Update Failed"))
-                            .setMessage(error.message ?: "Could not update market prices.")
+                            .setMessage(ui(error.message ?: "Could not update market prices."))
                             .setPositiveButton(ui("OK"), null)
                             .show()
                     }
@@ -3372,7 +3372,7 @@ class MainActivity : Activity() {
 
         dialog.setOnShowListener {
             dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
-                val finalBalance = input.text.toString().trim().replace(",", "").toDoubleOrNull()
+                val finalBalance = UiText.parseUserNumber(input.text.toString().trim().replace(",", ""))
                 if (finalBalance == null || !finalBalance.isFinite() || finalBalance < 0.0) {
                     input.error = ui("Enter a valid balance")
                     return@setOnClickListener
@@ -4176,7 +4176,7 @@ class MainActivity : Activity() {
         }
 
         if (showWorking) {
-            Toast.makeText(this, ui("$label…"), Toast.LENGTH_SHORT).show()
+            Toast.makeText(this, ui(label) + "…", Toast.LENGTH_SHORT).show()
         }
 
         try {
@@ -4353,7 +4353,7 @@ class MainActivity : Activity() {
                             .setTitle(ui("Cloud Sync Conflict"))
                             .setMessage(
                                 ui("Smart sync found changes on both Phone and Cloud. ") +
-                                    changedRows + " asset row(s) differ. Nothing was overwritten."
+                                    changedRows + ui(" asset row(s) differ. Nothing was overwritten.")
                             )
                             .setNegativeButton(ui("Later"), null)
                             .setNeutralButton(ui("Use Cloud")) { _, _ -> loadFromCloud() }
@@ -4372,10 +4372,10 @@ class MainActivity : Activity() {
 
     private fun showCloudAccessError(title: String, message: String) {
         AlertDialog.Builder(this)
-            .setTitle(title)
+            .setTitle(ui(title))
             .setMessage(
-                message +
-                    "\n\nIf the Google Drive file was moved, removed, or access expired, reconnect it."
+                ui(message) +
+                    "\n\n" + ui("If the Google Drive file was moved, removed, or access expired, reconnect it.")
             )
             .setNegativeButton(ui("Close"), null)
             .setPositiveButton(ui("Reconnect")) { _, _ ->
@@ -4448,10 +4448,10 @@ class MainActivity : Activity() {
                 AlertDialog.Builder(this)
                     .setTitle(ui("Cloud Status"))
                     .setMessage(
-                        state +
-                            "\n\nPhone: " + sharedPortfolioSummary(result.local) +
-                            "\nCloud: " + sharedPortfolioSummary(result.remote) +
-                            "\nChanged asset rows: " + changed
+                        ui(state) +
+                            "\n\n" + ui("Phone: ") + sharedPortfolioSummary(result.local) +
+                            "\n" + ui("Cloud: ") + sharedPortfolioSummary(result.remote) +
+                            "\n" + ui("Changed asset rows: ") + changed
                     )
                     .setNegativeButton(ui("Close"), null)
                     .setPositiveButton(ui("Sync Now")) { _, _ -> syncToCloud() }
@@ -4583,8 +4583,8 @@ class MainActivity : Activity() {
                             .setTitle(ui("Cloud Sync Conflict"))
                             .setMessage(
                                 ui("Both copies may contain changes. ") + changedRows +
-                                    " asset row(s) differ. Nothing was overwritten. " +
-                                    "Choose which portfolio to keep."
+                                    ui(" asset row(s) differ. Nothing was overwritten. ") +
+                                    ui("Choose which portfolio to keep.")
                             )
                             .setNegativeButton(ui("Cancel"), null)
                             .setNeutralButton(ui("Use Cloud")) { _, _ -> loadFromCloud() }
@@ -4678,7 +4678,7 @@ class MainActivity : Activity() {
             arrayOf("Export Backup", "Import Backup", "Restore Previous Local Data")
         } else {
             arrayOf("Export Backup", "Import Backup")
-        }
+        }.map(::ui).toTypedArray()
         AlertDialog.Builder(this)
             .setTitle(ui("Backup / Restore"))
             .setItems(options) { _, which ->
@@ -4698,7 +4698,7 @@ class MainActivity : Activity() {
                             } catch (error: Exception) {
                                 AlertDialog.Builder(this)
                                     .setTitle(ui("Recovery Failed"))
-                                    .setMessage(error.message ?: "Could not restore previous local data.")
+                                    .setMessage(ui(error.message ?: "Could not restore previous local data."))
                                     .setPositiveButton(ui("OK"), null)
                                     .show()
                             }
@@ -5137,7 +5137,11 @@ class MainActivity : Activity() {
                         label = "Creating cloud backup",
                         task = {
                             val document = mergedBackupDocument(null)
-                            writeUriText(uri, document.toString(2))
+                            PortfolioSafety.writeAndVerifyBackup(
+                                document.toString(2),
+                                write = { writeUriText(uri, it) },
+                                read = { readUriText(uri) }
+                            )
                             document
                         },
                         onSuccess = { document ->
@@ -5175,7 +5179,7 @@ class MainActivity : Activity() {
                                 .setTitle(ui("Cloud Backup Connected"))
                                 .setMessage(
                                     ui("The file is valid and connected. Load its data now or keep this phone's data? ") +
-                                        "Nothing will be overwritten until you choose."
+                                        ui("Nothing will be overwritten until you choose.")
                                 )
                                 .setNegativeButton(ui("Keep Phone Data")) { _, _ ->
                                     syncToCloud(forcePhoneData = true)
@@ -5195,7 +5199,7 @@ class MainActivity : Activity() {
         } catch (error: Exception) {
             AlertDialog.Builder(this)
                 .setTitle(ui("Backup Error"))
-                .setMessage(error.message ?: "Could not process the backup file.")
+                .setMessage(ui(error.message ?: "Could not process the backup file."))
                 .setPositiveButton(ui("OK"), null)
                 .show()
         }
@@ -5204,7 +5208,7 @@ class MainActivity : Activity() {
     private fun showBackupFileError(error: Exception) {
         AlertDialog.Builder(this)
             .setTitle(ui("Backup Error"))
-            .setMessage(error.message ?: "Could not process the backup file. Local data was not changed.")
+            .setMessage(ui(error.message ?: "Could not process the backup file. Local data was not changed."))
             .setPositiveButton(ui("OK"), null)
             .show()
     }

@@ -4,6 +4,55 @@ package com.arman.investmentandroid
 object UiText {
     private val fa = mapOf(
         "Investment Android" to "سرمایه‌گذاری اندروید",
+        "All prices updated." to "همهٔ قیمت‌ها به‌روز شدند.",
+        "Export Backup" to "خروجی پشتیبان",
+        "Import Backup" to "ورود فایل پشتیبان",
+        "Restore Previous Local Data" to "بازیابی دادهٔ محلی قبلی",
+        "Cloud Recovery Failed" to "بازیابی ابری ناموفق بود",
+        "Cloud Sync Failed" to "همگام‌سازی ابری ناموفق بود",
+        "Cloud Load Failed" to "بارگذاری ابری ناموفق بود",
+        "Cloud Status Failed" to "بررسی وضعیت ابر ناموفق بود",
+        "Cloud Setup Failed" to "ایجاد پشتیبان ابری ناموفق بود",
+        "Cloud Connection Failed" to "اتصال ابری ناموفق بود",
+        "Checking cloud" to "در حال بررسی ابر",
+        "Checking cloud status" to "در حال بررسی وضعیت ابر",
+        "Syncing safely" to "در حال همگام‌سازی ایمن",
+        "Loading cloud data" to "در حال بارگذاری دادهٔ ابری",
+        "Exporting backup" to "در حال ذخیرهٔ پشتیبان",
+        "Validating backup" to "در حال بررسی پشتیبان",
+        "Creating cloud backup" to "در حال ساخت پشتیبان ابری",
+        "Validating cloud backup" to "در حال بررسی پشتیبان ابری",
+        "If the Google Drive file was moved, removed, or access expired, reconnect it." to "اگر فایل گوگل درایو منتقل یا حذف شده یا دسترسی آن پایان یافته است، دوباره متصل شوید.",
+        "Phone and Cloud match." to "دادهٔ گوشی و ابر یکسان‌اند.",
+        "First sync needs a choice." to "برای اولین همگام‌سازی باید یکی از نسخه‌ها را انتخاب کنید.",
+        "Cloud has newer/different portfolio data." to "دادهٔ ابر نسبت به گوشی تغییر کرده است.",
+        "Phone has changes waiting to upload." to "تغییرات گوشی در انتظار بارگذاری هستند.",
+        "Conflict: both Phone and Cloud changed." to "تداخل: داده‌های گوشی و ابر هر دو تغییر کرده‌اند.",
+        "Phone: " to "گوشی: ",
+        "Cloud: " to "ابر: ",
+        "Changed asset rows: " to "ردیف‌های دارایی تغییرکرده: ",
+        " asset row(s) differ. Nothing was overwritten." to " ردیف دارایی متفاوت است؛ هیچ داده‌ای جایگزین نشد.",
+        " asset row(s) differ. Nothing was overwritten. " to " ردیف دارایی متفاوت است؛ هیچ داده‌ای جایگزین نشد. ",
+        "Choose which portfolio to keep." to "انتخاب کنید کدام نسخه از سبد نگه داشته شود.",
+        "Nothing will be overwritten until you choose." to "تا پیش از انتخاب شما هیچ داده‌ای جایگزین نمی‌شود.",
+        "Could not update market prices." to "به‌روزرسانی قیمت‌های بازار ناموفق بود.",
+        "Could not restore previous local data." to "بازیابی دادهٔ محلی قبلی ناموفق بود.",
+        "Could not process the backup file." to "پردازش فایل پشتیبان ناموفق بود.",
+        "Could not process the backup file. Local data was not changed." to "پردازش فایل پشتیبان ناموفق بود؛ داده‌های محلی تغییر نکردند.",
+        "Could not write the backup file." to "نوشتن فایل پشتیبان ناموفق بود.",
+        "Could not read the backup file." to "خواندن فایل پشتیبان ناموفق بود.",
+        "Could not apply the backup file." to "اعمال فایل پشتیبان ناموفق بود.",
+        "Could not create the cloud backup file." to "ساخت فایل پشتیبان ابری ناموفق بود.",
+        "Could not validate the selected cloud file." to "تأیید اعتبار فایل ابری انتخاب‌شده ناموفق بود.",
+        "Could not check the cloud file." to "بررسی فایل ابری ناموفق بود.",
+        "Cloud provider did not confirm the complete backup. The previous valid copy is available for recovery." to "ارائه‌دهندهٔ فایل، ذخیرهٔ کامل پشتیبان را تأیید نکرد. نسخهٔ سالم قبلی برای بازیابی در دسترس است.",
+        "Phone data changed while sync was running. Nothing was overwritten; run sync again." to "دادهٔ گوشی هنگام همگام‌سازی تغییر کرد. هیچ داده‌ای جایگزین نشد؛ دوباره همگام‌سازی کنید.",
+        "Phone data changed while the file was being read. Nothing was overwritten." to "دادهٔ گوشی هنگام خواندن فایل تغییر کرد؛ هیچ داده‌ای جایگزین نشد.",
+        "Connected cloud file is not a shared portfolio." to "فایل ابری متصل‌شده، سبد مشترک معتبر نیست.",
+        "Connected file is not a shared portfolio." to "فایل متصل‌شده، سبد مشترک معتبر نیست.",
+        "Shared portfolio data is missing." to "اطلاعات سبد مشترک وجود ندارد.",
+        "Cloud file is not a shared portfolio. No data was overwritten." to "فایل ابری، سبد مشترک معتبر نیست؛ هیچ داده‌ای جایگزین نشد.",
+        "Cloud sync requires an investment.shared.portfolio file." to "برای همگام‌سازی ابری به فایل investment.shared.portfolio نیاز است.",
         "Delete " to "حذف ",
         "Set " to "ثبت ",
         "Recover" to "بازیابی",
@@ -247,6 +296,22 @@ object UiText {
         "Manual" to "دستی", "Nobitex" to "نوبیتکس",
         "Toman" to "تومان", "Rial" to "ریال"
     )
+
+    /** Accept Western, Persian and Arabic-Indic digits in user-entered amounts. */
+    fun parseUserNumber(raw: String): Double? {
+        val normalized = buildString {
+            for (character in raw.trim()) {
+                when (character) {
+                    in '۰'..'۹' -> append('0' + (character - '۰'))
+                    in '٠'..'٩' -> append('0' + (character - '٠'))
+                    '٫' -> append('.')
+                    '٬', ',', ' ', '\u00a0' -> Unit
+                    else -> append(character)
+                }
+            }
+        }
+        return normalized.toDoubleOrNull()?.takeIf { it.isFinite() }
+    }
 
     fun translate(value: String, language: String): String {
         if (language != "fa") return value
