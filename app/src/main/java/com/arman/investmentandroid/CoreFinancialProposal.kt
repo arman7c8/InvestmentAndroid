@@ -36,7 +36,17 @@ object CoreFinancialProposal {
     ): Pair<String, Double> {
         require(!id.isNullOrBlank() && id == id.trim() && id.length <= 128 &&
             id != "external" && id in balances) { "Unknown Windows Core cash account." }
-        return id to balances.getValue(id)
+        return id to requireNumber(balances.getValue(id), "Core cash balance", CASH_LIMIT)
+    }
+
+    /** Guard double-precision no-ops and balances crossing zero. */
+    private fun changedValue(before: Double, delta: Double, limit: Double, label: String): Double {
+        val after = before + delta
+        require(before.isFinite() && before >= 0.0 && before <= limit &&
+            after.isFinite() && after >= 0.0 && after <= limit && after != before) {
+            "Unsafe or numerically invisible $label change."
+        }
+        return after
     }
 
     fun create(
@@ -75,13 +85,18 @@ object CoreFinancialProposal {
                     command.quantity, "trade quantity", QUANTITY_LIMIT, positive = true
                 )
                 if (type == "buy") {
-                    require(balance + 1e-7 >= amount) {
-                        "Insufficient cash for purchase."
-                    }
+                    require(balance >= amount) { "Insufficient cash for purchase." }
+                    changedValue(balance, -amount, CASH_LIMIT, "cash")
+                    changedValue(oldQuantity, quantity, QUANTITY_LIMIT, "asset quantity")
                 } else {
-                    require(oldQuantity + 1e-12 >= quantity) {
+                    require(oldQuantity >= quantity) {
                         "Insufficient asset quantity for sale."
                     }
+                    changedValue(balance, amount, CASH_LIMIT, "cash")
+                    changedValue(oldQuantity, -quantity, QUANTITY_LIMIT, "asset quantity")
+                }
+                require((amount / quantity).isFinite() && amount / quantity > 0.0) {
+                    "Trade execution price exceeds numeric precision."
                 }
                 data.put("assetId", assetId).put("accountId", account)
                     .put("quantity", quantity)
@@ -95,7 +110,9 @@ object CoreFinancialProposal {
                 val (from, fromBalance) = requireAccount(command.accountId, cash)
                 val (to, toBalance) = requireAccount(command.destinationAccountId, cash)
                 require(from != to) { "Transfer requires two different accounts." }
-                require(fromBalance + 1e-7 >= amount) { "Insufficient transfer cash." }
+                require(fromBalance >= amount) { "Insufficient transfer cash." }
+                changedValue(fromBalance, -amount, CASH_LIMIT, "source cash")
+                changedValue(toBalance, amount, CASH_LIMIT, "destination cash")
                 data.put("sourceAccountId", from).put("destinationAccountId", to)
                     .put("expectedSourceBalanceToman", fromBalance)
                     .put("expectedDestinationBalanceToman", toBalance)
@@ -107,8 +124,12 @@ object CoreFinancialProposal {
                 }
                 val (account, balance) = requireAccount(command.accountId, cash)
                 if (type == "withdraw") {
-                    require(balance + 1e-7 >= amount) { "Insufficient withdrawal cash." }
+                    require(balance >= amount) { "Insufficient withdrawal cash." }
                 }
+                changedValue(
+                    balance, if (type == "deposit") amount else -amount,
+                    CASH_LIMIT, "external cash"
+                )
                 data.put("accountId", account)
                     .put("expectedAccountBalanceToman", balance)
             }

@@ -151,6 +151,51 @@ class CoreFinancialProposalTest {
         }
     }
 
+    @Test fun preventsSubPrecisionDebitsAndCredits() {
+        val zeroCash = snapshot().copy(cashBalances = listOf(
+            CoreSnapshotPreview.CashPosition("wallet", 0.0)
+        ))
+        assertThrows(IllegalArgumentException::class.java) {
+            CoreFinancialProposal.create(
+                zeroCash, command("withdraw", amount = 1e-8)
+            )
+        }
+        val hugeCash = snapshot().copy(cashBalances = listOf(
+            CoreSnapshotPreview.CashPosition("wallet", 1e15)
+        ))
+        assertThrows(IllegalArgumentException::class.java) {
+            CoreFinancialProposal.create(
+                hugeCash, command("deposit", amount = 1e-8)
+            )
+        }
+        val largeQuantity = snapshot().copy(positions = listOf(
+            CoreSnapshotPreview.AssetPosition("btc", "Bitcoin", 1e12)
+        ))
+        assertThrows(IllegalArgumentException::class.java) {
+            CoreFinancialProposal.create(
+                largeQuantity, command("buy", amount = 100.0,
+                    asset = "btc", qty = 1e-12)
+            )
+        }
+        assertThrows(IllegalArgumentException::class.java) {
+            CoreFinancialProposal.create(
+                hugeCash.copy(positions = listOf(
+                    CoreSnapshotPreview.AssetPosition("btc", "Bitcoin", 0.0)
+                )),
+                command("buy", amount = 1e15, asset = "btc", qty = 1e-300)
+            )
+        }
+    }
+
+    @Test fun retainsRepresentableFractionalBuy() {
+        val purchase = command(
+            "buy", amount = 0.01, asset = "btc", qty = 0.00001
+        )
+        val result = JSONObject(CoreFinancialProposal.create(snapshot(), purchase))
+        assertEquals(0.01,
+            result.getJSONObject("transaction").getDouble("amountToman"), 1e-10)
+    }
+
     @Test fun proposalRejectsNonUuidIdentity() {
         assertThrows(IllegalArgumentException::class.java) {
             CoreFinancialProposal.create(snapshot(), command("deposit"), "not-a-uuid")
