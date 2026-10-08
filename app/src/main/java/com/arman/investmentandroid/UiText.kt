@@ -4,6 +4,9 @@ package com.arman.investmentandroid
 object UiText {
     private val fa = mapOf(
         "Investment Android" to "سرمایه‌گذاری اندروید",
+        "View Windows Core Snapshot (Read-only)" to "پیش‌نمایش فقط‌خواندنی دادهٔ ویندوز",
+        "Windows Core Preview (Read-only)" to "پیش‌نمایش فقط‌خواندنی ویندوز",
+        "Inspecting Windows Core snapshot" to "در حال بررسی نسخهٔ ویندوز",
         "Cloud file changed while preparing the backup. Nothing was overwritten; sync again." to
             "فایل ابری هنگام آماده‌سازی پشتیبان تغییر کرد. هیچ داده‌ای جایگزین نشد؛ دوباره همگام‌سازی کنید.",
         "Portfolio holdings match, but Android history differs. No data was overwritten. Choose which history to reconcile." to
