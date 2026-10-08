@@ -4041,6 +4041,7 @@ class MainActivity : Activity() {
                         identity
                     )
                 )
+            }
         }
         root.put("androidBackup", localSupplement)
         return root
