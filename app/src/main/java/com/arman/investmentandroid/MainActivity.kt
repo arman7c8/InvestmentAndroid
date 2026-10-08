@@ -2360,7 +2360,7 @@ class MainActivity : Activity() {
                     return@setOnClickListener
                 }
 
-                val updatedAssets = currentAssets.toMutableList()
+                val updatedAssets = loadAssets()
                 pushUndoCheckpoint()
                 updatedTargets.forEach { (index, target) ->
                     if (index in updatedAssets.indices) {
@@ -3252,7 +3252,7 @@ class MainActivity : Activity() {
                     JSONObject()
                 }
 
-                val updatedAssets = loadAssets()
+                val updatedAssets = currentAssets.toMutableList()
                 val updatedNames = mutableListOf<String>()
                 val failedNames = mutableListOf<String>()
 
