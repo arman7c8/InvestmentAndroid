@@ -3,7 +3,7 @@ name: Build Android APK
 on:
   workflow_dispatch:
   push:
-    branches: [ "main" ]
+    branches: [ "main", "codex/**" ]
 
 concurrency:
   group: android-apk-${{ github.ref }}
@@ -12,7 +12,7 @@ concurrency:
 jobs:
   build:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
 
     steps:
       - name: Checkout
@@ -50,13 +50,27 @@ jobs:
         with:
           gradle-version: "8.7"
 
-      - name: Build debug APK
-        run: gradle :app:assembleDebug --stacktrace
+      - name: Test, lint and build debug APK
+        run: gradle :app:testDebugUnitTest :app:lintDebug :app:assembleDebug --stacktrace
+
+      - name: Verify APK identity and checksum
+        shell: bash
+        run: |
+          set -euo pipefail
+          APK=app/build/outputs/apk/debug/app-debug.apk
+          test -s "$APK"
+          BADGING="$($ANDROID_HOME/build-tools/35.0.0/aapt dump badging "$APK")"
+          grep -q "name='com.arman.investmentandroid'" <<< "$BADGING"
+          grep -q "versionCode='32' versionName='0.32.0'" <<< "$BADGING"
+          mkdir -p dist
+          cp "$APK" dist/InvestmentAndroid-0.32.0-debug.apk
+          sha256sum dist/InvestmentAndroid-0.32.0-debug.apk > dist/SHA256SUMS.txt
+          printf 'Source commit: %s\n' "$GITHUB_SHA" > dist/SOURCE-COMMIT.txt
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: InvestmentAndroid-debug
-          path: app/build/outputs/apk/debug/app-debug.apk
+          name: InvestmentAndroid-0.32.0-debug-${{ github.sha }}
+          path: dist/
           if-no-files-found: error
-          retention-days: 7
+          retention-days: 30

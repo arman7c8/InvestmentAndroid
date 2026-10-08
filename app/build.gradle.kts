@@ -11,8 +11,12 @@ android {
         applicationId = "com.arman.investmentandroid"
         minSdk = 26
         targetSdk = 35
-        versionCode = 30
-        versionName = "0.30.0"
+        versionCode = 32
+        versionName = "0.32.0"
+    }
+
+    buildFeatures {
+        buildConfig = true
     }
 
     compileOptions {
@@ -26,4 +30,6 @@ android {
 }
 
 dependencies {
+    testImplementation("junit:junit:4.13.2")
+    testImplementation("org.json:json:20240303")
 }

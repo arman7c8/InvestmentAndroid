@@ -2,7 +2,9 @@ package com.arman.investmentandroid
 
 import android.app.Activity
 import android.app.AlertDialog
+import android.content.Context
 import android.content.Intent
+import android.content.res.Configuration
 import android.graphics.Color
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
@@ -10,7 +12,9 @@ import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.text.InputType
+import android.util.AtomicFile
 import android.view.Gravity
+import android.view.View
 import android.view.ViewGroup
 import android.widget.ArrayAdapter
 import android.widget.Button
@@ -25,12 +29,15 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.net.HttpURLConnection
 import java.net.URL
+import java.io.File
 import java.text.NumberFormat
 import java.text.SimpleDateFormat
 import java.security.MessageDigest
 import java.util.Date
 import java.util.Locale
 import java.util.UUID
+import java.util.concurrent.Executors
+import java.util.concurrent.atomic.AtomicBoolean
 
 class MainActivity : Activity() {
 
@@ -82,6 +89,7 @@ class MainActivity : Activity() {
 
     private val prefsName = "investment_android_prefs"
     private val assetsKey = "assets_json"
+    private val lastValidAssetsKey = "last_valid_assets_json"
     private val transactionsKey = "transactions_json"
     private val snapshotsKey = "snapshots_json"
     private val toleranceKey = "rebalance_tolerance"
@@ -99,6 +107,9 @@ class MainActivity : Activity() {
     private val cloudAutoSyncKey = "cloud_auto_sync"
     private val cloudAutoSyncMinutesKey = "cloud_auto_sync_minutes"
     private val cloudLastAutoCheckKey = "cloud_last_auto_check"
+    private val preRestoreBackupKey = "pre_restore_backup_json"
+    private val cloudPreWriteFileName = "cloud_prewrite_recovery.json"
+    private val uiLanguageKey = "ui_language"
     private val exportBackupRequestCode = 1001
     private val importBackupRequestCode = 1002
     private val createCloudBackupRequestCode = 1003
@@ -116,20 +127,53 @@ class MainActivity : Activity() {
     private var autoRefreshRunnable: Runnable? = null
     private val cloudSyncHandler = Handler(Looper.getMainLooper())
     private var cloudSyncRunnable: Runnable? = null
+    private val cloudExecutor = Executors.newSingleThreadExecutor()
+    private val cloudOperationInProgress = AtomicBoolean(false)
+    private val priceUpdateInProgress = AtomicBoolean(false)
 
     private fun dp(value: Int): Int =
         (value * resources.displayMetrics.density).toInt()
 
+    private fun uiLanguage(): String =
+        getSharedPreferences(prefsName, MODE_PRIVATE).getString(
+            uiLanguageKey,
+            if (Locale.getDefault().language == "fa") "fa" else "en"
+        ) ?: "en"
+
+    private fun ui(value: String): String = UiText.translate(value, uiLanguage())
+
+    override fun attachBaseContext(base: Context) {
+        val language = base.getSharedPreferences(prefsName, MODE_PRIVATE)
+            .getString(uiLanguageKey, null)
+            ?: if (Locale.getDefault().language == "fa") "fa" else "en"
+        val configuration = Configuration(base.resources.configuration)
+        configuration.setLocale(Locale(language))
+        configuration.setLayoutDirection(Locale(language))
+        super.attachBaseContext(base.createConfigurationContext(configuration))
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        window.decorView.layoutDirection =
+            if (uiLanguage() == "fa") View.LAYOUT_DIRECTION_RTL else View.LAYOUT_DIRECTION_LTR
         ensureSeedData()
 
         if (isAppLockEnabled()) {
             showLockedScreen()
             showStartupUnlockDialog()
+        } else if (savedInstanceState?.getBoolean("price_center_screen") == true) {
+            showPriceCenterScreen()
+        } else if (savedInstanceState?.getBoolean("portfolio_screen") == true) {
+            showPortfolioScreen()
         } else {
             showWelcomeScreen()
         }
+    }
+
+    override fun onSaveInstanceState(outState: Bundle) {
+        outState.putBoolean("portfolio_screen", onPortfolioScreen)
+        outState.putBoolean("price_center_screen", onPriceCenterScreen)
+        super.onSaveInstanceState(outState)
     }
 
     override fun onResume() {
@@ -144,13 +188,12 @@ class MainActivity : Activity() {
         super.onPause()
     }
 
-    private fun demoAssets(): List<Asset> =
-        listOf(
-            Asset("Cash", "Cash", 1.0, 250_000_000.0, 250_000_000.0, 20.0, true, "Manual", ""),
-            Asset("Gold", "Gold", 1.0, 375_000_000.0, 340_000_000.0, 30.0, true, "Manual", ""),
-            Asset("Stocks", "Stocks", 1.0, 250_000_000.0, 265_000_000.0, 20.0, true, "Manual", ""),
-            Asset("Crypto", "Crypto", 1.0, 375_000_000.0, 330_000_000.0, 30.0, true, "Manual", "")
-        )
+    override fun onDestroy() {
+        stopAutoRefresh()
+        stopSmartCloudSync()
+        cloudExecutor.shutdownNow()
+        super.onDestroy()
+    }
 
     private fun inferCategory(name: String): String {
         val lower = name.lowercase(Locale.US)
@@ -178,7 +221,7 @@ class MainActivity : Activity() {
     private fun ensureSeedData() {
         val prefs = getSharedPreferences(prefsName, MODE_PRIVATE)
         if (!prefs.contains(assetsKey)) {
-            saveAssets(demoAssets())
+            saveAssets(emptyList())
         }
         if (!prefs.contains(transactionsKey)) {
             saveTransactions(emptyList())
@@ -245,6 +288,9 @@ class MainActivity : Activity() {
             put("snapshots", JSONArray(prefs.getString(snapshotsKey, "[]") ?: "[]"))
             put("categories", JSONArray(prefs.getString(categoriesKey, "[]") ?: "[]"))
             put("tolerance", loadTolerance())
+            put("displayUnit", loadDisplayUnit())
+            put("summaryPeriod", loadSummaryPeriod())
+            put("autoRefreshMinutes", loadAutoRefreshMinutes())
         }
     }
 
@@ -291,13 +337,35 @@ class MainActivity : Activity() {
                 toleranceKey,
                 state.optDouble("tolerance", defaultTolerancePercent).toString()
             )
+            .putString(displayUnitKey, state.optString("displayUnit", loadDisplayUnit()))
+            .putString(summaryPeriodKey, state.optString("summaryPeriod", loadSummaryPeriod()))
+            .putInt(autoRefreshMinutesKey, state.optInt("autoRefreshMinutes", loadAutoRefreshMinutes()))
             .apply()
+    }
+
+    private fun preservePreRestoreState() {
+        val saved = getSharedPreferences(prefsName, MODE_PRIVATE)
+            .edit()
+            .putString(preRestoreBackupKey, capturePortfolioState().toString())
+            .commit()
+        check(saved) { "Could not preserve the current local portfolio before restore." }
+    }
+
+    private fun restorePreviousLocalState() {
+        val prefs = getSharedPreferences(prefsName, MODE_PRIVATE)
+        val raw = prefs.getString(preRestoreBackupKey, null)
+            ?: throw IllegalStateException("No previous local portfolio is available.")
+        val previous = JSONObject(raw)
+        val current = capturePortfolioState().toString()
+        restorePortfolioState(previous)
+        prefs.edit().putString(preRestoreBackupKey, current).apply()
+        scheduleAutoRefresh()
     }
 
     private fun undoLastChange() {
         val undo = loadStateStack(undoStackKey)
         if (undo.isEmpty()) {
-            Toast.makeText(this, "Nothing to undo.", Toast.LENGTH_SHORT).show()
+            Toast.makeText(this, ui("Nothing to undo."), Toast.LENGTH_SHORT).show()
             return
         }
 
@@ -309,13 +377,13 @@ class MainActivity : Activity() {
         saveStateStack(redoStackKey, redo)
         restorePortfolioState(previous)
         showPortfolioScreen()
-        Toast.makeText(this, "Change undone.", Toast.LENGTH_SHORT).show()
+        Toast.makeText(this, ui("Change undone."), Toast.LENGTH_SHORT).show()
     }
 
     private fun redoLastChange() {
         val redo = loadStateStack(redoStackKey)
         if (redo.isEmpty()) {
-            Toast.makeText(this, "Nothing to redo.", Toast.LENGTH_SHORT).show()
+            Toast.makeText(this, ui("Nothing to redo."), Toast.LENGTH_SHORT).show()
             return
         }
 
@@ -327,7 +395,7 @@ class MainActivity : Activity() {
         saveStateStack(redoStackKey, redo)
         restorePortfolioState(next)
         showPortfolioScreen()
-        Toast.makeText(this, "Change restored.", Toast.LENGTH_SHORT).show()
+        Toast.makeText(this, ui("Change restored."), Toast.LENGTH_SHORT).show()
     }
 
     private fun loadAssets(): MutableList<Asset> {
@@ -352,6 +420,7 @@ class MainActivity : Activity() {
 
                 when {
                     item.has("quantity") && item.has("price") -> {
+                        val quantity = item.optDouble("quantity", Double.NaN)
                         val price = item.optDouble("price", 0.0)
                         val averageCost = if (item.has("averageCost")) {
                             item.optDouble("averageCost", price)
@@ -388,11 +457,18 @@ class MainActivity : Activity() {
                             ""
                         }
 
+                        require(
+                            quantity.isFinite() && quantity >= 0.0 &&
+                                price.isFinite() && price >= 0.0 &&
+                                averageCost.isFinite() && averageCost >= 0.0 &&
+                                targetPercent.isFinite() && targetPercent in 0.0..100.0
+                        ) { "Stored asset contains invalid numeric data." }
+
                         assets.add(
                             Asset(
                                 name = name,
                                 category = category,
-                                quantity = item.optDouble("quantity", 1.0),
+                                quantity = quantity,
                                 price = price,
                                 averageCost = averageCost,
                                 targetPercent = targetPercent,
@@ -412,6 +488,9 @@ class MainActivity : Activity() {
 
                     else -> {
                         val legacyAmount = item.optDouble("amount", 0.0)
+                        require(legacyAmount.isFinite() && legacyAmount >= 0.0) {
+                            "Stored legacy asset contains invalid numeric data."
+                        }
                         assets.add(
                             Asset(
                                 name = name,
@@ -430,6 +509,15 @@ class MainActivity : Activity() {
                 }
             }
         } catch (_: Exception) {
+            val recovered = getSharedPreferences(prefsName, MODE_PRIVATE)
+                .getString(lastValidAssetsKey, null)
+            if (!recovered.isNullOrBlank() && recovered != raw && isValidLocalAssetsJson(recovered)) {
+                val restored = getSharedPreferences(prefsName, MODE_PRIVATE)
+                    .edit()
+                    .putString(assetsKey, recovered)
+                    .commit()
+                if (restored) return loadAssets()
+            }
             return mutableListOf()
         }
 
@@ -440,7 +528,7 @@ class MainActivity : Activity() {
         return assets
     }
 
-    private fun saveAssets(assets: List<Asset>) {
+    private fun assetsToJsonArray(assets: List<Asset>): JSONArray {
         val array = JSONArray()
         assets.forEach { asset ->
             array.put(
@@ -467,10 +555,42 @@ class MainActivity : Activity() {
             )
         }
 
-        getSharedPreferences(prefsName, MODE_PRIVATE)
-            .edit()
-            .putString(assetsKey, array.toString())
-            .apply()
+        return array
+    }
+
+    private fun isValidLocalAssetsJson(raw: String): Boolean {
+        return try {
+            val array = JSONArray(raw)
+            for (index in 0 until array.length()) {
+                val item = array.optJSONObject(index) ?: return false
+                if (item.optString("name", "").isBlank()) return false
+                val hasModernNumbers = item.has("quantity") && item.has("price")
+                val hasLegacyAmount = item.has("amount")
+                if (!hasModernNumbers && !hasLegacyAmount) return false
+                val values = if (hasModernNumbers) {
+                    listOf(item.opt("quantity"), item.opt("price"))
+                } else {
+                    listOf(item.opt("amount"))
+                }
+                if (values.any { it !is Number || !it.toDouble().isFinite() || it.toDouble() < 0.0 }) {
+                    return false
+                }
+            }
+            true
+        } catch (_: Exception) {
+            false
+        }
+    }
+
+    private fun saveAssets(assets: List<Asset>) {
+        val prefs = getSharedPreferences(prefsName, MODE_PRIVATE)
+        val next = assetsToJsonArray(assets).toString()
+        val editor = prefs.edit().putString(assetsKey, next)
+        val current = prefs.getString(assetsKey, null)
+        if (!current.isNullOrBlank() && current != next && isValidLocalAssetsJson(current)) {
+            editor.putString(lastValidAssetsKey, current)
+        }
+        editor.apply()
     }
 
     private fun assetToJson(asset: Asset): String {
@@ -597,10 +717,9 @@ class MainActivity : Activity() {
     }
 
     private fun saveTransactions(transactions: List<Transaction>) {
-        val trimmed = transactions.takeLast(100)
         val array = JSONArray()
 
-        trimmed.forEach { transaction ->
+        transactions.forEach { transaction ->
             array.put(
                 JSONObject().apply {
                     put("id", transaction.id)
@@ -651,7 +770,7 @@ class MainActivity : Activity() {
 
     private fun saveSnapshots(snapshots: List<Snapshot>) {
         val array = JSONArray()
-        snapshots.takeLast(100).forEach { snapshot ->
+        snapshots.forEach { snapshot ->
             array.put(
                 JSONObject().apply {
                     put("totalValue", snapshot.totalValue)
@@ -698,18 +817,20 @@ class MainActivity : Activity() {
 
             "Rial" -> {
                 scaledValue = value * 10.0
-                suffix = " Rial"
+                suffix = " " + ui("Rial")
                 decimals = 0
             }
 
             else -> {
                 scaledValue = value
-                suffix = " Toman"
+                suffix = " " + ui("Toman")
                 decimals = 0
             }
         }
 
-        val formatter = NumberFormat.getNumberInstance(Locale.US).apply {
+        val formatter = NumberFormat.getNumberInstance(
+            if (uiLanguage() == "fa") Locale("fa", "IR") else Locale.US
+        ).apply {
             maximumFractionDigits = decimals
             minimumFractionDigits = 0
         }
@@ -736,7 +857,9 @@ class MainActivity : Activity() {
     private fun loadTolerance(): Double {
         val raw = getSharedPreferences(prefsName, MODE_PRIVATE)
             .getString(toleranceKey, null)
-        return raw?.toDoubleOrNull() ?: defaultTolerancePercent
+        return raw?.toDoubleOrNull()
+            ?.takeIf { it.isFinite() && it in 0.0..20.0 }
+            ?: defaultTolerancePercent
     }
 
     private fun saveTolerance(value: Double) {
@@ -864,7 +987,7 @@ class MainActivity : Activity() {
 
         root.addView(
             TextView(this).apply {
-                text = "Investment Android"
+                text = ui("Investment Android")
                 textSize = 28f
                 setTypeface(typeface, Typeface.BOLD)
                 gravity = Gravity.CENTER
@@ -874,7 +997,7 @@ class MainActivity : Activity() {
 
         root.addView(
             TextView(this).apply {
-                text = "App Locked"
+                text = ui("App Locked")
                 textSize = 16f
                 gravity = Gravity.CENTER
                 setTextColor(Color.GRAY)
@@ -887,7 +1010,7 @@ class MainActivity : Activity() {
 
     private fun pinInput(): EditText {
         return EditText(this).apply {
-            hint = "4–8 digit PIN"
+            hint = ui("4–8 digit PIN")
             inputType = InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_VARIATION_PASSWORD
             setPadding(dp(20), dp(8), dp(20), 0)
         }
@@ -896,10 +1019,10 @@ class MainActivity : Activity() {
     private fun showStartupUnlockDialog() {
         val input = pinInput()
         val dialog = AlertDialog.Builder(this)
-            .setTitle("Unlock Investment")
-            .setMessage("Enter your app PIN.")
+            .setTitle(ui("Unlock Investment"))
+            .setMessage(ui("Enter your app PIN."))
             .setView(input)
-            .setPositiveButton("Unlock", null)
+            .setPositiveButton(ui("Unlock"), null)
             .create()
 
         dialog.setCancelable(false)
@@ -912,7 +1035,7 @@ class MainActivity : Activity() {
                     dialog.dismiss()
                     showWelcomeScreen()
                 } else {
-                    input.error = "Incorrect PIN"
+                    input.error = ui("Incorrect PIN")
                     input.selectAll()
                 }
             }
@@ -929,17 +1052,17 @@ class MainActivity : Activity() {
 
         val pin = pinInput()
         val confirm = pinInput().apply {
-            hint = "Confirm PIN"
+            hint = ui("Confirm PIN")
         }
         form.addView(pin)
         form.addView(confirm)
 
         val dialog = AlertDialog.Builder(this)
             .setTitle(if (isAppLockEnabled()) "Change App PIN" else "Enable App Lock")
-            .setMessage("Use a 4–8 digit PIN. The PIN itself is not stored.")
+            .setMessage(ui("Use a 4–8 digit PIN. The PIN itself is not stored."))
             .setView(form)
-            .setNegativeButton("Cancel", null)
-            .setPositiveButton("Save", null)
+            .setNegativeButton(ui("Cancel"), null)
+            .setPositiveButton(ui("Save"), null)
             .create()
 
         dialog.setOnShowListener {
@@ -949,13 +1072,13 @@ class MainActivity : Activity() {
 
                 when {
                     value.length !in 4..8 || value.any { !it.isDigit() } ->
-                        pin.error = "PIN must contain 4–8 digits"
+                        pin.error = ui("PIN must contain 4–8 digits")
                     value != confirmation ->
-                        confirm.error = "PINs do not match"
+                        confirm.error = ui("PINs do not match")
                     else -> {
                         savePin(value)
                         dialog.dismiss()
-                        Toast.makeText(this, "App lock enabled.", Toast.LENGTH_SHORT).show()
+                        Toast.makeText(this, ui("App lock enabled."), Toast.LENGTH_SHORT).show()
                         afterSave?.invoke()
                     }
                 }
@@ -968,10 +1091,10 @@ class MainActivity : Activity() {
     private fun verifyCurrentPinThen(action: () -> Unit) {
         val input = pinInput()
         val dialog = AlertDialog.Builder(this)
-            .setTitle("Verify Current PIN")
+            .setTitle(ui("Verify Current PIN"))
             .setView(input)
-            .setNegativeButton("Cancel", null)
-            .setPositiveButton("Continue", null)
+            .setNegativeButton(ui("Cancel"), null)
+            .setPositiveButton(ui("Continue"), null)
             .create()
 
         dialog.setOnShowListener {
@@ -980,7 +1103,7 @@ class MainActivity : Activity() {
                     dialog.dismiss()
                     action()
                 } else {
-                    input.error = "Incorrect PIN"
+                    input.error = ui("Incorrect PIN")
                     input.selectAll()
                 }
             }
@@ -996,18 +1119,18 @@ class MainActivity : Activity() {
         }
 
         AlertDialog.Builder(this)
-            .setTitle("App Lock")
-            .setMessage("App lock is enabled.")
-            .setItems(arrayOf("Change PIN", "Remove App Lock")) { _, which ->
+            .setTitle(ui("App Lock"))
+            .setMessage(ui("App lock is enabled."))
+            .setItems(arrayOf(ui("Change PIN"), ui("Remove App Lock"))) { _, which ->
                 when (which) {
                     0 -> verifyCurrentPinThen { showSetPinDialog() }
                     1 -> verifyCurrentPinThen {
                         removePin()
-                        Toast.makeText(this, "App lock removed.", Toast.LENGTH_SHORT).show()
+                        Toast.makeText(this, ui("App lock removed."), Toast.LENGTH_SHORT).show()
                     }
                 }
             }
-            .setNegativeButton("Close", null)
+            .setNegativeButton(ui("Close"), null)
             .show()
     }
 
@@ -1097,7 +1220,7 @@ class MainActivity : Activity() {
         }
 
         val title = TextView(this).apply {
-            text = "Investment Android"
+            text = ui("Investment Android")
             textSize = 30f
             setTypeface(typeface, Typeface.BOLD)
             gravity = Gravity.CENTER
@@ -1105,7 +1228,7 @@ class MainActivity : Activity() {
         }
 
         val subtitle = TextView(this).apply {
-            text = "Your portfolio, one step closer to mobile.\nv0.30.0"
+            text = ui("Your portfolio, one step closer to mobile.\nv${BuildConfig.VERSION_NAME}")
             textSize = 17f
             gravity = Gravity.CENTER
             setTextColor(Color.DKGRAY)
@@ -1113,7 +1236,7 @@ class MainActivity : Activity() {
         }
 
         val startButton = Button(this).apply {
-            text = "Open Portfolio"
+            text = ui("Open Portfolio")
             isAllCaps = false
             textSize = 17f
             setOnClickListener { showPortfolioScreen() }
@@ -1158,7 +1281,7 @@ class MainActivity : Activity() {
 
         container.addView(
             TextView(this).apply {
-                text = "My Portfolio"
+                text = ui("My Portfolio")
                 textSize = 28f
                 setTypeface(typeface, Typeface.BOLD)
                 setTextColor(Color.rgb(30, 30, 30))
@@ -1186,7 +1309,7 @@ class MainActivity : Activity() {
         if (assets.isEmpty()) {
             container.addView(
                 TextView(this).apply {
-                    text = "No assets yet. Tap Add Asset to create your first one."
+                    text = ui("No assets yet. Tap Add Asset to create your first one.")
                     textSize = 16f
                     setTextColor(Color.DKGRAY)
                     setPadding(0, dp(14), 0, dp(22))
@@ -1203,63 +1326,63 @@ class MainActivity : Activity() {
         }
 
         val addButton = Button(this).apply {
-            text = "+ Add Asset"
+            text = ui("+ Add Asset")
             isAllCaps = false
             textSize = 16f
             setOnClickListener { showAssetDialog() }
         }
 
         val priceCenterButton = Button(this).apply {
-            text = "Price Center"
+            text = ui("Price Center")
             isAllCaps = false
             textSize = 16f
             setOnClickListener { showPriceCenterScreen() }
         }
 
         val targetsButton = Button(this).apply {
-            text = "Edit Targets"
+            text = ui("Edit Targets")
             isAllCaps = false
             textSize = 16f
             setOnClickListener { showTargetsDialog() }
         }
 
         val toleranceButton = Button(this).apply {
-            text = String.format(Locale.US, "Tolerance: ±%.1f%%", tolerance)
+            text = String.format(Locale.US, ui("Tolerance: ±%.1f%%"), tolerance)
             isAllCaps = false
             textSize = 16f
             setOnClickListener { showToleranceDialog() }
         }
 
         val activityButton = Button(this).apply {
-            text = "Activity"
+            text = ui("Activity")
             isAllCaps = false
             textSize = 16f
             setOnClickListener { showActivityDialog() }
         }
 
         val moreToolsButton = Button(this).apply {
-            text = "More Tools"
+            text = ui("More Tools")
             isAllCaps = false
             textSize = 16f
             setOnClickListener { showToolsDialog() }
         }
 
         val historyButton = Button(this).apply {
-            text = "Portfolio History"
+            text = ui("Portfolio History")
             isAllCaps = false
             textSize = 16f
             setOnClickListener { showHistoryDialog() }
         }
 
         val categoriesButton = Button(this).apply {
-            text = "Manage Categories"
+            text = ui("Manage Categories")
             isAllCaps = false
             textSize = 16f
             setOnClickListener { showCategoryManagerDialog() }
         }
 
         val undoButton = Button(this).apply {
-            text = "Undo"
+            text = ui("Undo")
             isAllCaps = false
             textSize = 16f
             isEnabled = loadStateStack(undoStackKey).isNotEmpty()
@@ -1267,7 +1390,7 @@ class MainActivity : Activity() {
         }
 
         val redoButton = Button(this).apply {
-            text = "Redo"
+            text = ui("Redo")
             isAllCaps = false
             textSize = 16f
             isEnabled = loadStateStack(redoStackKey).isNotEmpty()
@@ -1275,30 +1398,30 @@ class MainActivity : Activity() {
         }
 
         val settingsButton = Button(this).apply {
-            text = "Settings"
+            text = ui("Settings")
             isAllCaps = false
             textSize = 16f
             setOnClickListener { showSettingsDialog() }
         }
 
         val backupButton = Button(this).apply {
-            text = "Backup / Restore"
+            text = ui("Backup / Restore")
             isAllCaps = false
             textSize = 16f
             setOnClickListener { showBackupDialog() }
         }
 
         val resetButton = Button(this).apply {
-            text = "Reset Demo Data"
+            text = ui("Reset Portfolio")
             isAllCaps = false
             setOnClickListener {
                 AlertDialog.Builder(this@MainActivity)
-                    .setTitle("Reset demo data?")
-                    .setMessage("This will replace assets and clear transaction history.")
-                    .setNegativeButton("Cancel", null)
-                    .setPositiveButton("Reset") { _, _ ->
+                    .setTitle(ui("Reset portfolio?"))
+                    .setMessage(ui("This will delete all assets and transaction history. You can undo it afterward."))
+                    .setNegativeButton(ui("Cancel"), null)
+                    .setPositiveButton(ui("Reset")) { _, _ ->
                         pushUndoCheckpoint()
-                        saveAssets(demoAssets())
+                        saveAssets(emptyList())
                         saveTransactions(emptyList())
                         saveSnapshots(emptyList())
                         showPortfolioScreen()
@@ -1308,7 +1431,7 @@ class MainActivity : Activity() {
         }
 
         val backButton = Button(this).apply {
-            text = "Back"
+            text = ui("Back")
             isAllCaps = false
             setOnClickListener { showWelcomeScreen() }
         }
@@ -1324,7 +1447,7 @@ class MainActivity : Activity() {
 
         container.addView(
             TextView(this).apply {
-                text = "Quick Actions"
+                text = ui("Quick Actions")
                 textSize = 19f
                 setTypeface(typeface, Typeface.BOLD)
                 setTextColor(Color.rgb(35, 35, 35))
@@ -1386,7 +1509,7 @@ class MainActivity : Activity() {
         container.addView(backButton, buttonParams)
         container.addView(
             TextView(this).apply {
-                text = "Investment Android • v0.30.0"
+                text = ui("Investment Android • v${BuildConfig.VERSION_NAME}")
                 textSize = 12f
                 gravity = Gravity.CENTER
                 setTextColor(Color.GRAY)
@@ -1449,7 +1572,7 @@ class MainActivity : Activity() {
 
         textBlock.addView(
             TextView(this).apply {
-                text = "Cloud Sync"
+                text = ui("Cloud Sync")
                 textSize = 15f
                 setTypeface(typeface, Typeface.BOLD)
                 setTextColor(Color.rgb(35, 35, 35))
@@ -1459,12 +1582,12 @@ class MainActivity : Activity() {
         textBlock.addView(
             TextView(this).apply {
                 text = buildString {
-                    append(localCloudSyncState())
+                    append(ui(localCloudSyncState()))
                     append(
                         if (isCloudAutoSyncEnabled()) {
-                            " • Smart sync " + loadCloudAutoSyncMinutes() + "m"
+                            ui(" • Smart sync ") + loadCloudAutoSyncMinutes() + ui("m")
                         } else {
-                            " • Smart sync off"
+                            ui(" • Smart sync off")
                         }
                     )
                     if (lastSync > 0L) {
@@ -1490,7 +1613,7 @@ class MainActivity : Activity() {
 
         headerRow.addView(
             Button(this).apply {
-                text = if (connected) "Sync Now" else "Connect"
+                text = ui(if (connected) "Sync Now" else "Connect")
                 isAllCaps = false
                 textSize = 13f
                 setOnClickListener {
@@ -1557,7 +1680,7 @@ class MainActivity : Activity() {
 
         card.addView(
             TextView(this).apply {
-                text = "Total Portfolio Value"
+                text = ui("Total Portfolio Value")
                 textSize = 13f
                 setTextColor(Color.GRAY)
             }
@@ -1575,7 +1698,7 @@ class MainActivity : Activity() {
 
         card.addView(
             TextView(this).apply {
-                text = "Invested: " + formatToman(totalInvested)
+                text = ui("Invested: ") + formatToman(totalInvested)
                 textSize = 13f
                 setTextColor(Color.DKGRAY)
             }
@@ -1583,7 +1706,7 @@ class MainActivity : Activity() {
 
         card.addView(
             TextView(this).apply {
-                text = "Unrealized P/L: " + formatSignedToman(totalProfit)
+                text = ui("Unrealized P/L: ") + formatSignedToman(totalProfit)
                 textSize = 15f
                 setTypeface(typeface, Typeface.BOLD)
                 setTextColor(
@@ -1600,7 +1723,7 @@ class MainActivity : Activity() {
         if (snapshotChange != null) {
             card.addView(
                 TextView(this).apply {
-                    text = "Since previous snapshot: " + formatSignedToman(snapshotChange)
+                    text = ui("Since previous snapshot: ") + formatSignedToman(snapshotChange)
                     textSize = 13f
                     setTextColor(
                         when {
@@ -1618,9 +1741,9 @@ class MainActivity : Activity() {
         card.addView(
             TextView(this).apply {
                 text = if (lastPriceUpdate > 0L) {
-                    "Prices updated: " + formatDate(lastPriceUpdate)
+                    ui("Prices updated: ") + formatDate(lastPriceUpdate)
                 } else {
-                    "Prices have not been updated yet."
+                    ui("Prices have not been updated yet.")
                 }
                 textSize = 12f
                 setTextColor(Color.GRAY)
@@ -1632,11 +1755,11 @@ class MainActivity : Activity() {
                 text = when {
                     !targetValid -> String.format(
                         Locale.US,
-                        "Portfolio Health: Fix targets (total %.1f%%)",
+                        ui("Portfolio Health: Fix targets (total %.1f%%)"),
                         totalTarget
                     )
-                    needAttention == 0 -> "Portfolio Health: On target"
-                    else -> "Portfolio Health: " + needAttention + " asset(s) need attention"
+                    needAttention == 0 -> ui("Portfolio Health: On target")
+                    else -> ui("Portfolio Health: ") + needAttention + ui(" asset(s) need attention")
                 }
                 textSize = 14f
                 setTypeface(typeface, Typeface.BOLD)
@@ -1670,7 +1793,7 @@ class MainActivity : Activity() {
     ) {
         parent.addView(
             TextView(this).apply {
-                text = "Category Breakdown"
+                text = ui("Category Breakdown")
                 textSize = 19f
                 setTypeface(typeface, Typeface.BOLD)
                 setTextColor(Color.rgb(35, 35, 35))
@@ -1693,7 +1816,7 @@ class MainActivity : Activity() {
                         text = String.format(
                             Locale.US,
                             "%s  •  %.1f%%  •  %s",
-                            category,
+                            ui(category),
                             allocation,
                             formatToman(value)
                         )
@@ -1725,7 +1848,7 @@ class MainActivity : Activity() {
     ) {
         parent.addView(
             TextView(this).apply {
-                text = "Holdings"
+                text = ui("Holdings")
                 textSize = 21f
                 setTypeface(typeface, Typeface.BOLD)
                 setTextColor(Color.rgb(35, 35, 35))
@@ -1748,7 +1871,7 @@ class MainActivity : Activity() {
                     text = String.format(
                         Locale.US,
                         "%s  •  %.1f%%  •  %s",
-                        category,
+                        ui(category),
                         categoryAllocation,
                         formatToman(categoryValue)
                     )
@@ -1798,12 +1921,12 @@ class MainActivity : Activity() {
             "App Lock",
             "Settings",
             "Backup / Restore",
-            "Reset Demo Data"
+            "Reset Portfolio"
         )
 
         AlertDialog.Builder(this)
-            .setTitle("Portfolio Tools")
-            .setItems(options) { _, which ->
+            .setTitle(ui("Portfolio Tools"))
+            .setItems(options.map(::ui).toTypedArray()) { _, which ->
                 when (which) {
                     0 -> sharePrivacySafeAiSummary()
                     1 -> showCloudBackupDialog()
@@ -1817,18 +1940,18 @@ class MainActivity : Activity() {
                     9 -> showResetDemoDialog()
                 }
             }
-            .setNegativeButton("Close", null)
+            .setNegativeButton(ui("Close"), null)
             .show()
     }
 
     private fun showResetDemoDialog() {
         AlertDialog.Builder(this)
-            .setTitle("Reset demo data?")
-            .setMessage("This will replace assets and clear transaction history.")
-            .setNegativeButton("Cancel", null)
-            .setPositiveButton("Reset") { _, _ ->
+            .setTitle(ui("Reset portfolio?"))
+            .setMessage(ui("This will delete all assets and transaction history. You can undo it afterward."))
+            .setNegativeButton(ui("Cancel"), null)
+            .setPositiveButton(ui("Reset")) { _, _ ->
                 pushUndoCheckpoint()
-                saveAssets(demoAssets())
+                saveAssets(emptyList())
                 saveTransactions(emptyList())
                 saveSnapshots(emptyList())
                 showPortfolioScreen()
@@ -1862,7 +1985,7 @@ class MainActivity : Activity() {
 
         parent.addView(
             TextView(this).apply {
-                text = period + " Summary"
+                text = ui(period) + ui(" Summary")
                 textSize = 19f
                 setTypeface(typeface, Typeface.BOLD)
                 setTextColor(Color.rgb(35, 35, 35))
@@ -1873,15 +1996,15 @@ class MainActivity : Activity() {
         parent.addView(
             TextView(this).apply {
                 text = buildString {
-                    append("Buy: ")
+                    append(ui("Buy: "))
                     append(formatToman(buyTotal))
-                    append("  •  Sell: ")
+                    append(ui("  •  Sell: "))
                     append(formatToman(sellTotal))
-                    append("\nRealized P/L: ")
+                    append(ui("\nRealized P/L: "))
                     append(formatSignedToman(realizedProfit))
-                    append("\nIncome: ")
+                    append(ui("\nIncome: "))
                     append(formatToman(income))
-                    append("  •  Expense: ")
+                    append(ui("  •  Expense: "))
                     append(formatToman(expense))
                 }
                 textSize = 13f
@@ -1907,7 +2030,7 @@ class MainActivity : Activity() {
         val options = categories + "+ Add Category"
 
         AlertDialog.Builder(this)
-            .setTitle("Categories")
+            .setTitle(ui("Categories"))
             .setItems(options.toTypedArray()) { _, which ->
                 if (which == categories.size) {
                     showAddCategoryDialog()
@@ -1916,30 +2039,30 @@ class MainActivity : Activity() {
                     if (coreCategories.contains(category)) {
                         AlertDialog.Builder(this)
                             .setTitle(category)
-                            .setMessage("This is a core category used by portfolio logic. Add a custom category if you need a different label.")
-                            .setPositiveButton("OK", null)
+                            .setMessage(ui("This is a core category used by portfolio logic. Add a custom category if you need a different label."))
+                            .setPositiveButton(ui("OK"), null)
                             .show()
                     } else {
                         showCustomCategoryActions(category)
                     }
                 }
             }
-            .setNegativeButton("Close", null)
+            .setNegativeButton(ui("Close"), null)
             .show()
     }
 
     private fun showAddCategoryDialog() {
         val input = EditText(this).apply {
-            hint = "Category name"
+            hint = ui("Category name")
             inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_CAP_SENTENCES
             setPadding(dp(20), dp(8), dp(20), 0)
         }
 
         val dialog = AlertDialog.Builder(this)
-            .setTitle("Add Category")
+            .setTitle(ui("Add Category"))
             .setView(input)
-            .setNegativeButton("Cancel", null)
-            .setPositiveButton("Add", null)
+            .setNegativeButton(ui("Cancel"), null)
+            .setPositiveButton(ui("Add"), null)
             .create()
 
         dialog.setOnShowListener {
@@ -1948,9 +2071,9 @@ class MainActivity : Activity() {
                 val categories = loadCategories()
 
                 when {
-                    name.isBlank() -> input.error = "Enter a category name"
+                    name.isBlank() -> input.error = ui("Enter a category name")
                     categories.any { it.equals(name, ignoreCase = true) } ->
-                        input.error = "Category already exists"
+                        input.error = ui("Category already exists")
                     else -> {
                         pushUndoCheckpoint()
                         categories.add(name)
@@ -1968,30 +2091,30 @@ class MainActivity : Activity() {
     private fun showCustomCategoryActions(category: String) {
         AlertDialog.Builder(this)
             .setTitle(category)
-            .setItems(arrayOf("Rename", "Delete")) { _, which ->
+            .setItems(arrayOf(ui("Rename"), ui("Delete"))) { _, which ->
                 if (which == 0) {
                     showRenameCategoryDialog(category)
                 } else {
                     confirmDeleteCategory(category)
                 }
             }
-            .setNegativeButton("Cancel", null)
+            .setNegativeButton(ui("Cancel"), null)
             .show()
     }
 
     private fun showRenameCategoryDialog(oldName: String) {
         val input = EditText(this).apply {
-            hint = "Category name"
+            hint = ui("Category name")
             inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_CAP_SENTENCES
             setText(oldName)
             setPadding(dp(20), dp(8), dp(20), 0)
         }
 
         val dialog = AlertDialog.Builder(this)
-            .setTitle("Rename Category")
+            .setTitle(ui("Rename Category"))
             .setView(input)
-            .setNegativeButton("Cancel", null)
-            .setPositiveButton("Save", null)
+            .setNegativeButton(ui("Cancel"), null)
+            .setPositiveButton(ui("Save"), null)
             .create()
 
         dialog.setOnShowListener {
@@ -2000,11 +2123,11 @@ class MainActivity : Activity() {
                 val categories = loadCategories()
 
                 when {
-                    newName.isBlank() -> input.error = "Enter a category name"
+                    newName.isBlank() -> input.error = ui("Enter a category name")
                     categories.any {
                         !it.equals(oldName, ignoreCase = true) &&
                             it.equals(newName, ignoreCase = true)
-                    } -> input.error = "Category already exists"
+                    } -> input.error = ui("Category already exists")
                     newName == oldName -> dialog.dismiss()
                     else -> {
                         val assets = loadAssets()
@@ -2042,10 +2165,10 @@ class MainActivity : Activity() {
         }
 
         AlertDialog.Builder(this)
-            .setTitle("Delete " + category + "?")
+            .setTitle(ui("Delete ") + category + "?")
             .setMessage(message)
-            .setNegativeButton("Cancel", null)
-            .setPositiveButton("Delete") { _, _ ->
+            .setNegativeButton(ui("Cancel"), null)
+            .setPositiveButton(ui("Delete")) { _, _ ->
                 val categories = loadCategories()
                 val assets = loadAssets()
 
@@ -2074,7 +2197,7 @@ class MainActivity : Activity() {
         fun addLabel(textValue: String) {
             form.addView(
                 TextView(this).apply {
-                    text = textValue
+                    text = ui(textValue)
                     textSize = 14f
                     setTypeface(typeface, Typeface.BOLD)
                     setTextColor(Color.DKGRAY)
@@ -2083,12 +2206,20 @@ class MainActivity : Activity() {
             )
         }
 
+        addLabel("Language / زبان")
+        val languageSpinner = Spinner(this)
+        languageSpinner.adapter = ArrayAdapter(
+            this, android.R.layout.simple_spinner_item, listOf("English", "فارسی")
+        ).apply { setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item) }
+        languageSpinner.setSelection(if (uiLanguage() == "fa") 1 else 0)
+        form.addView(languageSpinner)
+
         addLabel("Display unit")
         val unitSpinner = Spinner(this)
         val unitAdapter = ArrayAdapter(
             this,
             android.R.layout.simple_spinner_item,
-            displayUnits
+            displayUnits.map(::ui)
         ).apply {
             setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item)
         }
@@ -2103,7 +2234,7 @@ class MainActivity : Activity() {
         val periodAdapter = ArrayAdapter(
             this,
             android.R.layout.simple_spinner_item,
-            summaryPeriods
+            summaryPeriods.map(::ui)
         ).apply {
             setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item)
         }
@@ -2130,22 +2261,26 @@ class MainActivity : Activity() {
         form.addView(refreshSpinner)
 
         val dialog = AlertDialog.Builder(this)
-            .setTitle("Settings")
+            .setTitle(ui("Settings"))
             .setView(form)
-            .setNegativeButton("Cancel", null)
-            .setPositiveButton("Save", null)
+            .setNegativeButton(ui("Cancel"), null)
+            .setPositiveButton(ui("Save"), null)
             .create()
 
         dialog.setOnShowListener {
             dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
-                val unit = unitSpinner.selectedItem.toString()
-                val period = periodSpinner.selectedItem.toString()
+                val unit = displayUnits[unitSpinner.selectedItemPosition]
+                val period = summaryPeriods[periodSpinner.selectedItemPosition]
                 val refresh = autoRefreshValues[refreshSpinner.selectedItemPosition]
+                val language = if (languageSpinner.selectedItemPosition == 1) "fa" else "en"
 
                 saveSettings(unit, period, refresh)
+                val languageChanged = language != uiLanguage()
+                getSharedPreferences(prefsName, MODE_PRIVATE).edit()
+                    .putString(uiLanguageKey, language).apply()
                 scheduleAutoRefresh()
                 dialog.dismiss()
-                showPortfolioScreen()
+                if (languageChanged) recreate() else showPortfolioScreen()
             }
         }
 
@@ -2156,7 +2291,7 @@ class MainActivity : Activity() {
         val assets = loadAssets()
         val targetEntries = assets.withIndex().filter { it.value.includeInTarget }
         if (targetEntries.isEmpty()) {
-            Toast.makeText(this, "No assets are included in target allocation.", Toast.LENGTH_SHORT).show()
+            Toast.makeText(this, ui("No assets are included in target allocation."), Toast.LENGTH_SHORT).show()
             return
         }
 
@@ -2181,7 +2316,7 @@ class MainActivity : Activity() {
             )
 
             val input = EditText(this).apply {
-                hint = "Target %"
+                hint = ui("Target %")
                 inputType = InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_FLAG_DECIMAL
                 setText(formatQuantity(asset.targetPercent))
             }
@@ -2194,11 +2329,11 @@ class MainActivity : Activity() {
         }
 
         val dialog = AlertDialog.Builder(this)
-            .setTitle("Edit Target Allocation")
-            .setMessage("Targets must add up to 100%.")
+            .setTitle(ui("Edit Target Allocation"))
+            .setMessage(ui("Targets must add up to 100%."))
             .setView(scroll)
-            .setNegativeButton("Cancel", null)
-            .setPositiveButton("Save", null)
+            .setNegativeButton(ui("Cancel"), null)
+            .setPositiveButton(ui("Save"), null)
             .create()
 
         dialog.setOnShowListener {
@@ -2207,9 +2342,9 @@ class MainActivity : Activity() {
                 var invalid = false
 
                 inputs.forEach { (index, input) ->
-                    val value = input.text.toString().trim().replace(",", "").toDoubleOrNull()
-                    if (value == null || value < 0.0 || value > 100.0) {
-                        input.error = "Enter 0 to 100"
+                    val value = UiText.parseUserNumber(input.text.toString().trim().replace(",", ""))
+                    if (value == null || !value.isFinite() || value < 0.0 || value > 100.0) {
+                        input.error = ui("Enter 0 to 100")
                         invalid = true
                     } else {
                         updatedTargets[index] = value
@@ -2249,26 +2384,26 @@ class MainActivity : Activity() {
 
     private fun showToleranceDialog() {
         val input = EditText(this).apply {
-            hint = "Tolerance (%)"
+            hint = ui("Tolerance (%)")
             inputType = InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_FLAG_DECIMAL
             setText(formatQuantity(loadTolerance()))
             setPadding(dp(20), dp(8), dp(20), 0)
         }
 
         val dialog = AlertDialog.Builder(this)
-            .setTitle("Rebalance Tolerance")
-            .setMessage("Assets within this distance from target are treated as on target.")
+            .setTitle(ui("Rebalance Tolerance"))
+            .setMessage(ui("Assets within this distance from target are treated as on target."))
             .setView(input)
-            .setNegativeButton("Cancel", null)
-            .setPositiveButton("Save", null)
+            .setNegativeButton(ui("Cancel"), null)
+            .setPositiveButton(ui("Save"), null)
             .create()
 
         dialog.setOnShowListener {
             dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
-                val value = input.text.toString().trim().replace(",", "").toDoubleOrNull()
+                val value = UiText.parseUserNumber(input.text.toString().trim().replace(",", ""))
 
-                if (value == null || value < 0.0 || value > 20.0) {
-                    input.error = "Enter a value from 0 to 20"
+                if (value == null || !value.isFinite() || value < 0.0 || value > 20.0) {
+                    input.error = ui("Enter a value from 0 to 20")
                     return@setOnClickListener
                 }
 
@@ -2291,7 +2426,7 @@ class MainActivity : Activity() {
     ) {
         parent.addView(
             TextView(this).apply {
-                text = "Rebalance Summary"
+                text = ui("Rebalance Summary")
                 textSize = 21f
                 setTypeface(typeface, Typeface.BOLD)
                 setTextColor(Color.rgb(35, 35, 35))
@@ -2302,7 +2437,7 @@ class MainActivity : Activity() {
         if (kotlin.math.abs(totalTarget - 100.0) > 0.01) {
             parent.addView(
                 TextView(this).apply {
-                    text = "Set targets to a total of 100% to activate rebalance guidance."
+                    text = ui("Set targets to a total of 100% to activate rebalance guidance.")
                     textSize = 14f
                     setTextColor(Color.GRAY)
                     setPadding(0, 0, 0, dp(10))
@@ -2331,7 +2466,7 @@ class MainActivity : Activity() {
         if (actions.isEmpty()) {
             parent.addView(
                 TextView(this).apply {
-                    text = "Portfolio is within tolerance. No rebalance action is needed."
+                    text = ui("Portfolio is within tolerance. No rebalance action is needed.")
                     textSize = 14f
                     setTextColor(Color.rgb(25, 125, 70))
                     setPadding(0, 0, 0, dp(10))
@@ -2344,9 +2479,9 @@ class MainActivity : Activity() {
             parent.addView(
                 TextView(this).apply {
                     text = if (amount > 0.0) {
-                        "Buy " + name + " • " + formatToman(amount)
+                        ui("Buy") + " " + name + " • " + formatToman(amount)
                     } else {
-                        "Sell " + name + " • " + formatToman(kotlin.math.abs(amount))
+                        ui("Sell") + " " + name + " • " + formatToman(kotlin.math.abs(amount))
                     }
                     textSize = 14f
                     setTypeface(typeface, Typeface.BOLD)
@@ -2375,7 +2510,7 @@ class MainActivity : Activity() {
         }
 
         val nameInput = EditText(this).apply {
-            hint = "Asset name"
+            hint = ui("Asset name")
             inputType = InputType.TYPE_CLASS_TEXT
             setText(existing?.name ?: "")
         }
@@ -2385,7 +2520,7 @@ class MainActivity : Activity() {
         val categoryAdapter = ArrayAdapter(
             this,
             android.R.layout.simple_spinner_item,
-            availableCategories
+            availableCategories.map(::ui)
         ).apply {
             setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item)
         }
@@ -2396,19 +2531,19 @@ class MainActivity : Activity() {
         categorySpinner.setSelection(categoryIndex)
 
         val quantityInput = EditText(this).apply {
-            hint = "Quantity"
+            hint = ui("Quantity")
             inputType = InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_FLAG_DECIMAL
             setText(existing?.let { formatQuantity(it.quantity).replace(",", "") } ?: "")
         }
 
         val priceInput = EditText(this).apply {
-            hint = "Current price per unit (Toman)"
+            hint = ui("Current price per unit (Toman)")
             inputType = InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_FLAG_DECIMAL
             setText(existing?.let { it.price.toLong().toString() } ?: "")
         }
 
         val averageCostInput = EditText(this).apply {
-            hint = "Average cost per unit (Toman)"
+            hint = ui("Average cost per unit (Toman)")
             inputType = InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_FLAG_DECIMAL
             setText(existing?.let { it.averageCost.toLong().toString() } ?: "")
         }
@@ -2417,7 +2552,7 @@ class MainActivity : Activity() {
         val priceSourceAdapter = ArrayAdapter(
             this,
             android.R.layout.simple_spinner_item,
-            priceSources
+            priceSources.map(::ui)
         ).apply {
             setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item)
         }
@@ -2427,19 +2562,19 @@ class MainActivity : Activity() {
         priceSourceSpinner.setSelection(sourceIndex)
 
         val symbolInput = EditText(this).apply {
-            hint = "Market symbol (e.g. BTC, ETH, SOL)"
+            hint = ui("Market symbol (e.g. BTC, ETH, SOL)")
             inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_CAP_CHARACTERS
             setText(existing?.symbol ?: "")
         }
 
         val includeTargetCheck = CheckBox(this).apply {
-            text = "Include in target allocation"
+            text = ui("Include in target allocation")
             isChecked = existing?.includeInTarget ?: true
             setPadding(0, dp(6), 0, 0)
         }
 
         val targetInput = EditText(this).apply {
-            hint = "Target allocation (%)"
+            hint = ui("Target allocation (%)")
             inputType = InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_FLAG_DECIMAL
             setText(existing?.let { formatQuantity(it.targetPercent) } ?: "0")
         }
@@ -2456,50 +2591,53 @@ class MainActivity : Activity() {
 
         val isEditing = index != null && existing != null
         val dialog = AlertDialog.Builder(this)
-            .setTitle(if (isEditing) "Edit Asset" else "Add Asset")
+            .setTitle(ui(if (isEditing) "Edit Asset" else "Add Asset"))
             .setView(form)
-            .setNegativeButton("Cancel", null)
-            .setPositiveButton(if (isEditing) "Save" else "Add", null)
+            .setNegativeButton(ui("Cancel"), null)
+            .setPositiveButton(ui(if (isEditing) "Save" else "Add"), null)
             .create()
 
         dialog.setOnShowListener {
             dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
                 val name = nameInput.text.toString().trim()
-                val category = categorySpinner.selectedItem.toString()
-                val quantity = quantityInput.text.toString().trim().replace(",", "").toDoubleOrNull()
-                val price = priceInput.text.toString().trim().replace(",", "").toDoubleOrNull()
+                val category = availableCategories[categorySpinner.selectedItemPosition]
+                val quantity = UiText.parseUserNumber(quantityInput.text.toString().trim().replace(",", ""))
+                val price = UiText.parseUserNumber(priceInput.text.toString().trim().replace(",", ""))
                 val averageCostText = averageCostInput.text.toString().trim().replace(",", "")
-                val averageCost = if (averageCostText.isBlank()) price else averageCostText.toDoubleOrNull()
-                val targetPercent = targetInput.text.toString().trim().replace(",", "").toDoubleOrNull()
-                val priceSource = priceSourceSpinner.selectedItem.toString()
+                val averageCost = if (averageCostText.isBlank()) price else UiText.parseUserNumber(averageCostText)
+                val targetPercent = UiText.parseUserNumber(targetInput.text.toString().trim().replace(",", ""))
+                val priceSource = priceSources[priceSourceSpinner.selectedItemPosition]
                 val symbol = symbolInput.text.toString().trim().uppercase(Locale.US)
 
                 when {
-                    name.isEmpty() -> nameInput.error = "Enter an asset name"
-                    quantity == null || quantity <= 0.0 ->
-                        quantityInput.error = "Enter a quantity greater than zero"
-                    price == null || price < 0.0 ->
-                        priceInput.error = "Enter a valid current price"
-                    averageCost == null || averageCost < 0.0 ->
-                        averageCostInput.error = "Enter a valid average cost"
-                    targetPercent == null || targetPercent < 0.0 || targetPercent > 100.0 ->
-                        targetInput.error = "Target must be between 0 and 100"
+                    name.isEmpty() -> nameInput.error = ui("Enter an asset name")
+                    quantity == null || !quantity.isFinite() || quantity <= 0.0 ->
+                        quantityInput.error = ui("Enter a quantity greater than zero")
+                    price == null || !price.isFinite() || price < 0.0 ->
+                        priceInput.error = ui("Enter a valid current price")
+                    averageCost == null || !averageCost.isFinite() || averageCost < 0.0 ->
+                        averageCostInput.error = ui("Enter a valid average cost")
+                    targetPercent == null || !targetPercent.isFinite() || targetPercent < 0.0 || targetPercent > 100.0 ->
+                        targetInput.error = ui("Target must be between 0 and 100")
                     priceSource == "Nobitex" && symbol.isBlank() ->
-                        symbolInput.error = "Enter a Nobitex market symbol"
+                        symbolInput.error = ui("Enter a Nobitex market symbol")
                     priceSource == "Nobitex" && category != "Crypto" ->
-                        symbolInput.error = "Nobitex source is currently for Crypto assets"
+                        symbolInput.error = ui("Nobitex source is currently for Crypto assets")
                     else -> {
                         val assets = loadAssets()
-                        val updated = Asset(
-                            name,
-                            category,
-                            quantity,
-                            price,
-                            averageCost,
-                            targetPercent,
-                            includeTargetCheck.isChecked,
-                            priceSource,
-                            symbol
+                        val updated = (existing ?: Asset(
+                            name, category, quantity, price, averageCost, targetPercent,
+                            includeTargetCheck.isChecked, priceSource, symbol
+                        )).copy(
+                            name = name,
+                            category = category,
+                            quantity = quantity,
+                            price = price,
+                            averageCost = averageCost,
+                            targetPercent = targetPercent,
+                            includeInTarget = includeTargetCheck.isChecked,
+                            priceSource = priceSource,
+                            symbol = symbol
                         )
 
                         if (isEditing && index != null && index in assets.indices) {
@@ -2558,9 +2696,9 @@ class MainActivity : Activity() {
         card.addView(
             TextView(this).apply {
                 text = buildString {
-                    append(asset.category)
+                    append(ui(asset.category))
                     append(" • ")
-                    append(asset.priceSource)
+                    append(ui(asset.priceSource))
                     if (asset.symbol.isNotBlank()) {
                         append(" • ")
                         append(asset.symbol)
@@ -2574,7 +2712,7 @@ class MainActivity : Activity() {
 
         card.addView(
             TextView(this).apply {
-                text = "Quantity: " + formatQuantity(asset.quantity)
+                text = ui("Quantity: ") + formatQuantity(asset.quantity)
                 textSize = 14f
                 setTextColor(Color.DKGRAY)
             }
@@ -2582,7 +2720,7 @@ class MainActivity : Activity() {
 
         card.addView(
             TextView(this).apply {
-                text = "Price: " + formatToman(asset.price)
+                text = ui("Price: ") + formatToman(asset.price)
                 textSize = 14f
                 setTextColor(Color.DKGRAY)
             }
@@ -2590,7 +2728,7 @@ class MainActivity : Activity() {
 
         card.addView(
             TextView(this).apply {
-                text = "Avg. cost: " + formatToman(asset.averageCost)
+                text = ui("Avg. cost: ") + formatToman(asset.averageCost)
                 textSize = 14f
                 setTextColor(Color.DKGRAY)
             }
@@ -2598,7 +2736,7 @@ class MainActivity : Activity() {
 
         card.addView(
             TextView(this).apply {
-                text = "Value: " + formatToman(asset.value)
+                text = ui("Value: ") + formatToman(asset.value)
                 textSize = 16f
                 setTypeface(typeface, Typeface.BOLD)
                 setTextColor(Color.rgb(45, 45, 45))
@@ -2608,7 +2746,7 @@ class MainActivity : Activity() {
 
         card.addView(
             TextView(this).apply {
-                text = "P/L: " + formatSignedToman(asset.profit)
+                text = ui("P/L: ") + formatSignedToman(asset.profit)
                 textSize = 14f
                 setTypeface(typeface, Typeface.BOLD)
                 setTextColor(
@@ -2626,13 +2764,13 @@ class MainActivity : Activity() {
                 text = if (asset.includeInTarget) {
                     String.format(
                         Locale.US,
-                        "Portfolio: %.1f%%  •  Target pool: %.1f%%  •  Target: %.1f%%",
+                        ui("Portfolio: %.1f%%  •  Target pool: %.1f%%  •  Target: %.1f%%"),
                         allocation,
                         targetAllocation,
                         asset.targetPercent
                     )
                 } else {
-                    String.format(Locale.US, "Portfolio: %.1f%%  •  Target: Excluded", allocation)
+                    String.format(Locale.US, ui("Portfolio: %.1f%%  •  Target: Excluded"), allocation)
                 }
                 textSize = 14f
                 setTextColor(Color.GRAY)
@@ -2644,9 +2782,9 @@ class MainActivity : Activity() {
         card.addView(
             TextView(this).apply {
                 text = if (asset.includeInTarget) {
-                    String.format(Locale.US, "Distance to target: %+.1f%%", gap)
+                    String.format(Locale.US, ui("Distance to target: %+.1f%%"), gap)
                 } else {
-                    "Distance to target: Not applicable"
+                    ui("Distance to target: Not applicable")
                 }
                 textSize = 13f
                 setTextColor(
@@ -2665,11 +2803,11 @@ class MainActivity : Activity() {
         card.addView(
             TextView(this).apply {
                 text = when {
-                    !asset.includeInTarget -> "Rebalance: Excluded from target"
-                    asset.targetPercent <= 0.0 -> "Rebalance: No target set"
-                    kotlin.math.abs(gap) <= tolerancePercent -> "Rebalance: On target"
-                    rebalanceAmount > 0.0 -> "Rebalance: Buy about " + formatToman(rebalanceAmount)
-                    else -> "Rebalance: Sell about " + formatToman(kotlin.math.abs(rebalanceAmount))
+                    !asset.includeInTarget -> ui("Rebalance: Excluded from target")
+                    asset.targetPercent <= 0.0 -> ui("Rebalance: No target set")
+                    kotlin.math.abs(gap) <= tolerancePercent -> ui("Rebalance: On target")
+                    rebalanceAmount > 0.0 -> ui("Rebalance: Buy about ") + formatToman(rebalanceAmount)
+                    else -> ui("Rebalance: Sell about ") + formatToman(kotlin.math.abs(rebalanceAmount))
                 }
                 textSize = 13f
                 setTypeface(typeface, Typeface.BOLD)
@@ -2689,13 +2827,13 @@ class MainActivity : Activity() {
         }
 
         val buyButton = Button(this).apply {
-            text = "Buy"
+            text = ui("Buy")
             isAllCaps = false
             setOnClickListener { showTransactionDialog(index, asset, true) }
         }
 
         val sellButton = Button(this).apply {
-            text = "Sell"
+            text = ui("Sell")
             isAllCaps = false
             setOnClickListener { showTransactionDialog(index, asset, false) }
         }
@@ -2715,7 +2853,7 @@ class MainActivity : Activity() {
 
         if (asset.category == "Cash") {
             val balanceButton = Button(this).apply {
-                text = "Set Final Balance"
+                text = ui("Set Final Balance")
                 isAllCaps = false
                 setOnClickListener { showCashBalanceDialog(index, asset) }
             }
@@ -2732,7 +2870,7 @@ class MainActivity : Activity() {
 
         card.addView(
             TextView(this).apply {
-                text = "Tap name to edit • Long press card to delete"
+                text = ui("Tap name to edit • Long press card to delete")
                 textSize = 12f
                 setTextColor(Color.GRAY)
                 setPadding(0, dp(7), 0, 0)
@@ -2762,12 +2900,12 @@ class MainActivity : Activity() {
         }
 
         val quantityInput = EditText(this).apply {
-            hint = "Quantity"
+            hint = ui("Quantity")
             inputType = InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_FLAG_DECIMAL
         }
 
         val priceInput = EditText(this).apply {
-            hint = "Transaction price per unit (Toman)"
+            hint = ui("Transaction price per unit (Toman)")
             inputType = InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_FLAG_DECIMAL
             setText(asset.price.toLong().toString())
         }
@@ -2778,22 +2916,22 @@ class MainActivity : Activity() {
         val dialog = AlertDialog.Builder(this)
             .setTitle((if (isBuy) "Buy " else "Sell ") + asset.name)
             .setView(form)
-            .setNegativeButton("Cancel", null)
+            .setNegativeButton(ui("Cancel"), null)
             .setPositiveButton(if (isBuy) "Buy" else "Sell", null)
             .create()
 
         dialog.setOnShowListener {
             dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
-                val quantity = quantityInput.text.toString().trim().replace(",", "").toDoubleOrNull()
-                val transactionPrice = priceInput.text.toString().trim().replace(",", "").toDoubleOrNull()
+                val quantity = UiText.parseUserNumber(quantityInput.text.toString().trim().replace(",", ""))
+                val transactionPrice = UiText.parseUserNumber(priceInput.text.toString().trim().replace(",", ""))
 
                 when {
-                    quantity == null || quantity <= 0.0 ->
-                        quantityInput.error = "Enter a quantity greater than zero"
-                    transactionPrice == null || transactionPrice < 0.0 ->
-                        priceInput.error = "Enter a valid transaction price"
+                    quantity == null || !quantity.isFinite() || quantity <= 0.0 ->
+                        quantityInput.error = ui("Enter a quantity greater than zero")
+                    transactionPrice == null || !transactionPrice.isFinite() || transactionPrice < 0.0 ->
+                        priceInput.error = ui("Enter a valid transaction price")
                     !isBuy && quantity > asset.quantity ->
-                        quantityInput.error = "You only own " + formatQuantity(asset.quantity)
+                        quantityInput.error = ui("You only own ") + formatQuantity(asset.quantity)
                     else -> {
                         val assets = loadAssets()
                         if (index !in assets.indices) {
@@ -2889,7 +3027,7 @@ class MainActivity : Activity() {
 
         container.addView(
             TextView(this).apply {
-                text = "Price Center"
+                text = ui("Price Center")
                 textSize = 28f
                 setTypeface(typeface, Typeface.BOLD)
                 setTextColor(Color.rgb(30, 30, 30))
@@ -2898,7 +3036,7 @@ class MainActivity : Activity() {
 
         container.addView(
             TextView(this).apply {
-                text = "Update all current prices in one place."
+                text = ui("Update all current prices in one place.")
                 textSize = 14f
                 setTextColor(Color.GRAY)
                 setPadding(0, dp(6), 0, dp(16))
@@ -2923,9 +3061,9 @@ class MainActivity : Activity() {
                     text = buildString {
                         append(asset.name)
                         append(" • ")
-                        append(asset.category)
+                        append(ui(asset.category))
                         append(" • ")
-                        append(asset.priceSource)
+                        append(ui(asset.priceSource))
                         if (asset.symbol.isNotBlank()) {
                             append(" • ")
                             append(asset.symbol)
@@ -2938,7 +3076,7 @@ class MainActivity : Activity() {
             )
 
             val input = EditText(this).apply {
-                hint = "Current price (Toman)"
+                hint = ui("Current price (Toman)")
                 inputType = InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_FLAG_DECIMAL
                 setText(asset.price.toLong().toString())
             }
@@ -2958,16 +3096,16 @@ class MainActivity : Activity() {
         }
 
         val saveButton = Button(this).apply {
-            text = "Save All Prices"
+            text = ui("Save All Prices")
             isAllCaps = false
             setOnClickListener {
                 val updatedAssets = loadAssets()
                 var invalid = false
 
                 inputs.forEach { (index, input) ->
-                    val value = input.text.toString().trim().replace(",", "").toDoubleOrNull()
-                    if (value == null || value < 0.0) {
-                        input.error = "Enter a valid price"
+                    val value = UiText.parseUserNumber(input.text.toString().trim().replace(",", ""))
+                    if (value == null || !value.isFinite() || value < 0.0) {
+                        input.error = ui("Enter a valid price")
                         invalid = true
                     } else if (index in updatedAssets.indices) {
                         updatedAssets[index] = updatedAssets[index].copy(price = value)
@@ -2979,20 +3117,20 @@ class MainActivity : Activity() {
                     saveAssets(updatedAssets)
                     recordSnapshot(updatedAssets)
                     markPriceUpdate()
-                    Toast.makeText(this@MainActivity, "All prices updated.", Toast.LENGTH_SHORT).show()
+                    Toast.makeText(this@MainActivity, ui("All prices updated."), Toast.LENGTH_SHORT).show()
                     showPortfolioScreen()
                 }
             }
         }
 
         val apiButton = Button(this).apply {
-            text = "Update Nobitex Prices"
+            text = ui("Update Nobitex Prices")
             isAllCaps = false
             setOnClickListener { updateNobitexPrices() }
         }
 
         val backButton = Button(this).apply {
-            text = "Back to Portfolio"
+            text = ui("Back to Portfolio")
             isAllCaps = false
             setOnClickListener { showPortfolioScreen() }
         }
@@ -3031,7 +3169,7 @@ class MainActivity : Activity() {
             connection.connectTimeout = 12_000
             connection.readTimeout = 12_000
             connection.setRequestProperty("Accept", "application/json")
-            connection.setRequestProperty("User-Agent", "InvestmentAndroid/0.9")
+            connection.setRequestProperty("User-Agent", "InvestmentAndroid/${BuildConfig.VERSION_NAME}")
             val code = connection.responseCode
             if (code !in 200..299) {
                 throw IllegalStateException("HTTP " + code)
@@ -3053,16 +3191,27 @@ class MainActivity : Activity() {
         if (apiEntries.isEmpty()) {
             if (showResult) {
                 AlertDialog.Builder(this)
-                    .setTitle("Nobitex")
-                    .setMessage("No Crypto assets are configured with Nobitex as their price source.")
-                    .setPositiveButton("OK", null)
+                    .setTitle(ui("Nobitex"))
+                    .setMessage(ui("No Crypto assets are configured with Nobitex as their price source."))
+                    .setPositiveButton(ui("OK"), null)
                     .show()
             }
             return
         }
 
+        if (cloudOperationInProgress.get() || !priceUpdateInProgress.compareAndSet(false, true)) {
+            if (showResult) {
+                Toast.makeText(
+                    this,
+                    ui("A price, backup, or cloud operation is already running."),
+                    Toast.LENGTH_SHORT
+                ).show()
+            }
+            return
+        }
+
         if (showResult) {
-            Toast.makeText(this, "Updating Nobitex prices...", Toast.LENGTH_SHORT).show()
+            Toast.makeText(this, ui("Updating Nobitex prices..."), Toast.LENGTH_SHORT).show()
         }
 
         Thread {
@@ -3086,6 +3235,10 @@ class MainActivity : Activity() {
                     .getString("latest")
                     .toDouble()
 
+                if (!usdtRls.isFinite() || usdtRls <= 0.0) {
+                    throw IllegalStateException("Nobitex returned an invalid USDT price.")
+                }
+
                 val usdtToman = usdtRls / 10.0
 
                 val cryptoStats = if (symbols.isNotEmpty()) {
@@ -3104,7 +3257,7 @@ class MainActivity : Activity() {
                     JSONObject()
                 }
 
-                val updatedAssets = loadAssets()
+                val updatedAssets = currentAssets.toMutableList()
                 val updatedNames = mutableListOf<String>()
                 val failedNames = mutableListOf<String>()
 
@@ -3125,7 +3278,7 @@ class MainActivity : Activity() {
                             usdtPrice * usdtToman
                         }
 
-                        if (index in updatedAssets.indices && priceToman >= 0.0) {
+                        if (index in updatedAssets.indices && priceToman.isFinite() && priceToman > 0.0) {
                             updatedAssets[index] = updatedAssets[index].copy(price = priceToman)
                             updatedNames.add(asset.name)
                         } else {
@@ -3140,11 +3293,30 @@ class MainActivity : Activity() {
                     throw IllegalStateException("No configured Nobitex prices could be updated.")
                 }
 
-                saveAssets(updatedAssets)
-                recordSnapshot(updatedAssets)
-                markPriceUpdate()
-
                 runOnUiThread {
+                    if (isFinishing || isDestroyed) {
+                        priceUpdateInProgress.set(false)
+                        return@runOnUiThread
+                    }
+                    val latestAssets = loadAssets()
+                    if (latestAssets.size != currentAssets.size ||
+                        latestAssets.indices.any { !assetsEquivalent(latestAssets[it], currentAssets[it]) }
+                    ) {
+                        priceUpdateInProgress.set(false)
+                        if (showResult) {
+                            AlertDialog.Builder(this)
+                                .setTitle(ui("Prices Not Applied"))
+                                .setMessage(ui("The portfolio changed while prices were downloading. Try again; no newer edits were overwritten."))
+                                .setPositiveButton(ui("OK"), null)
+                                .show()
+                        }
+                        return@runOnUiThread
+                    }
+                    pushUndoCheckpoint()
+                    saveAssets(updatedAssets)
+                    recordSnapshot(updatedAssets)
+                    markPriceUpdate()
+                    priceUpdateInProgress.set(false)
                     if (showResult) {
                         val message = buildString {
                             append("Updated: ")
@@ -3158,21 +3330,23 @@ class MainActivity : Activity() {
                         }
 
                         AlertDialog.Builder(this)
-                            .setTitle("Nobitex Update")
+                            .setTitle(ui("Nobitex Update"))
                             .setMessage(message)
-                            .setPositiveButton("OK") { _, _ -> showPortfolioScreen() }
+                            .setPositiveButton(ui("OK")) { _, _ -> showPortfolioScreen() }
                             .show()
                     } else if (onPortfolioScreen) {
                         showPortfolioScreen()
                     }
                 }
             } catch (error: Exception) {
-                if (showResult) {
-                    runOnUiThread {
+                runOnUiThread {
+                    priceUpdateInProgress.set(false)
+                    if (isFinishing || isDestroyed) return@runOnUiThread
+                    if (showResult) {
                         AlertDialog.Builder(this)
-                            .setTitle("Nobitex Update Failed")
-                            .setMessage(error.message ?: "Could not update market prices.")
-                            .setPositiveButton("OK", null)
+                            .setTitle(ui("Nobitex Update Failed"))
+                            .setMessage(ui(error.message ?: "Could not update market prices."))
+                            .setPositiveButton(ui("OK"), null)
                             .show()
                     }
                 }
@@ -3182,25 +3356,25 @@ class MainActivity : Activity() {
 
     private fun showCashBalanceDialog(index: Int, asset: Asset) {
         val input = EditText(this).apply {
-            hint = "Final balance (Toman)"
+            hint = ui("Final balance (Toman)")
             inputType = InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_FLAG_DECIMAL
             setText(asset.value.toLong().toString())
             setPadding(dp(20), dp(8), dp(20), 0)
         }
 
         val dialog = AlertDialog.Builder(this)
-            .setTitle("Set " + asset.name + " Balance")
-            .setMessage("The app will infer the difference as income or expense.")
+            .setTitle(ui("Set ") + asset.name + " Balance")
+            .setMessage(ui("The app will infer the difference as income or expense."))
             .setView(input)
-            .setNegativeButton("Cancel", null)
-            .setPositiveButton("Save", null)
+            .setNegativeButton(ui("Cancel"), null)
+            .setPositiveButton(ui("Save"), null)
             .create()
 
         dialog.setOnShowListener {
             dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
-                val finalBalance = input.text.toString().trim().replace(",", "").toDoubleOrNull()
-                if (finalBalance == null || finalBalance < 0.0) {
-                    input.error = "Enter a valid balance"
+                val finalBalance = UiText.parseUserNumber(input.text.toString().trim().replace(",", ""))
+                if (finalBalance == null || !finalBalance.isFinite() || finalBalance < 0.0) {
+                    input.error = ui("Enter a valid balance")
                     return@setOnClickListener
                 }
 
@@ -3254,26 +3428,26 @@ class MainActivity : Activity() {
 
     private fun transactionDetails(transaction: Transaction): String {
         return buildString {
-            append(transaction.type)
+            append(ui(transaction.type))
             append(" • ")
             append(transaction.assetName)
             if (transaction.type == "INCOME" || transaction.type == "EXPENSE") {
-                append("\nAmount: ")
+                append(ui("\nAmount: "))
                 append(formatToman(transaction.price))
             } else {
-                append("\nQuantity: ")
+                append(ui("\nQuantity: "))
                 append(formatQuantity(transaction.quantity))
-                append("\nPrice: ")
+                append(ui("\nPrice: "))
                 append(formatToman(transaction.price))
             }
             if (transaction.type == "SELL") {
-                append("\nRealized P/L: ")
+                append(ui("\nRealized P/L: "))
                 append(formatSignedToman(transaction.realizedProfit))
             }
             append("\n")
             append(formatDate(transaction.timestamp))
             if (!transaction.managed) {
-                append("\nLegacy activity: portfolio-safe revert unavailable")
+                append(ui("\nLegacy activity: portfolio-safe revert unavailable"))
             }
         }
     }
@@ -3314,12 +3488,12 @@ class MainActivity : Activity() {
 
         if (!canSafelyRevertTransaction(transaction, transactions, assets)) {
             AlertDialog.Builder(this)
-                .setTitle("Cannot Safely Revert")
+                .setTitle(ui("Cannot Safely Revert"))
                 .setMessage(
-                    "This transaction is not the latest managed change for the asset, " +
+                    ui("This transaction is not the latest managed change for the asset, ") +
                         "or the asset has changed since it was recorded."
                 )
-                .setPositiveButton("OK", null)
+                .setPositiveButton(ui("OK"), null)
                 .show()
             return
         }
@@ -3342,11 +3516,15 @@ class MainActivity : Activity() {
         saveTransactions(transactions)
         recordSnapshot(assets)
         showPortfolioScreen()
-        Toast.makeText(this, "Transaction reverted.", Toast.LENGTH_SHORT).show()
+        Toast.makeText(this, ui("Transaction reverted."), Toast.LENGTH_SHORT).show()
     }
 
-    private fun showActivityDialog() {
+    private fun showActivityDialog(page: Int = 0) {
         val transactions = loadTransactions()
+        val ordered = transactions.sortedByDescending { it.timestamp }
+        val pageSize = 100
+        val pageCount = ((ordered.size + pageSize - 1) / pageSize).coerceAtLeast(1)
+        val currentPage = page.coerceIn(0, pageCount - 1)
         val assets = loadAssets()
         val content = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
@@ -3356,14 +3534,15 @@ class MainActivity : Activity() {
         if (transactions.isEmpty()) {
             content.addView(
                 TextView(this).apply {
-                    text = "No activity yet."
+                    text = ui("No activity yet.")
                     textSize = 14f
                     setTextColor(Color.GRAY)
                 }
             )
         } else {
-            transactions
-                .sortedByDescending { it.timestamp }
+            ordered
+                .drop(currentPage * pageSize)
+                .take(pageSize)
                 .forEach { transaction ->
                     val card = LinearLayout(this).apply {
                         orientation = LinearLayout.VERTICAL
@@ -3385,18 +3564,18 @@ class MainActivity : Activity() {
 
                     val canRevert = canSafelyRevertTransaction(transaction, transactions, assets)
                     val revertButton = Button(this).apply {
-                        text = if (canRevert) "Revert Transaction" else "Revert Unavailable"
+                        text = ui(if (canRevert) "Revert Transaction" else "Revert Unavailable")
                         isAllCaps = false
                         isEnabled = canRevert
                         setOnClickListener {
                             AlertDialog.Builder(this@MainActivity)
-                                .setTitle("Revert transaction?")
+                                .setTitle(ui("Revert transaction?"))
                                 .setMessage(
-                                    "This will reverse the portfolio effect of this transaction " +
+                                    ui("This will reverse the portfolio effect of this transaction ") +
                                         "and remove it from Activity."
                                 )
-                                .setNegativeButton("Cancel", null)
-                                .setPositiveButton("Revert") { _, _ ->
+                                .setNegativeButton(ui("Cancel"), null)
+                                .setPositiveButton(ui("Revert")) { _, _ ->
                                     revertTransaction(transaction.id)
                                 }
                                 .show()
@@ -3423,16 +3602,50 @@ class MainActivity : Activity() {
                         }
                     )
                 }
+            if (pageCount > 1) {
+                content.addView(TextView(this).apply {
+                    text = String.format(
+                        Locale.US, ui("Page %d of %d • %d saved transactions"),
+                        currentPage + 1, pageCount, ordered.size
+                    )
+                    gravity = Gravity.CENTER
+                })
+                val navigation = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+                lateinit var activityDialog: AlertDialog
+                for ((label, nextPage) in listOf(
+                    ui("Newer") to currentPage - 1,
+                    ui("Older") to currentPage + 1
+                )) {
+                    navigation.addView(Button(this).apply {
+                        text = label
+                        isAllCaps = false
+                        isEnabled = nextPage in 0 until pageCount
+                        setOnClickListener {
+                            activityDialog.dismiss()
+                            showActivityDialog(nextPage)
+                        }
+                    }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+                }
+                content.addView(navigation)
+                val dialog = AlertDialog.Builder(this)
+                    .setTitle(ui("Activity Manager"))
+                    .setView(ScrollView(this).apply { addView(content) })
+                    .setPositiveButton(ui("Close"), null)
+                    .create()
+                activityDialog = dialog
+                dialog.show()
+                return
+            }
         }
 
         AlertDialog.Builder(this)
-            .setTitle("Activity Manager")
+            .setTitle(ui("Activity Manager"))
             .setView(
                 ScrollView(this).apply {
                     addView(content)
                 }
             )
-            .setPositiveButton("Close", null)
+            .setPositiveButton(ui("Close"), null)
             .show()
     }
 
@@ -3446,7 +3659,7 @@ class MainActivity : Activity() {
         if (snapshots.isEmpty()) {
             content.addView(
                 TextView(this).apply {
-                    text = "No portfolio snapshots yet. Save prices in Price Center to create one."
+                    text = ui("No portfolio snapshots yet. Save prices in Price Center to create one.")
                     textSize = 14f
                     setTextColor(Color.GRAY)
                 }
@@ -3461,7 +3674,7 @@ class MainActivity : Activity() {
                         text = buildString {
                             append(formatToman(snapshot.totalValue))
                             if (change != null) {
-                                append("\nChange: ")
+                                append(ui("\nChange: "))
                                 append(formatSignedToman(change))
                             }
                             append("\n")
@@ -3487,13 +3700,13 @@ class MainActivity : Activity() {
         }
 
         AlertDialog.Builder(this)
-            .setTitle("Portfolio History")
+            .setTitle(ui("Portfolio History"))
             .setView(
                 ScrollView(this).apply {
                     addView(content)
                 }
             )
-            .setPositiveButton("Close", null)
+            .setPositiveButton(ui("Close"), null)
             .show()
     }
 
@@ -3585,23 +3798,23 @@ class MainActivity : Activity() {
 
         return buildString {
             if (connected) {
-                append("Cloud file connected.")
-                append("\nSmart sync: ")
+                append(ui("Cloud file connected."))
+                append(ui("\nSmart sync: "))
                 append(
                     if (isCloudAutoSyncEnabled()) {
-                        "On • every " + loadCloudAutoSyncMinutes() + " min while app is open"
+                        ui("On • every ") + loadCloudAutoSyncMinutes() + ui(" min while app is open")
                     } else {
-                        "Off"
+                        ui("Off")
                     }
                 )
                 if (lastSync > 0L) {
-                    append("\nLast sync: ")
+                    append(ui("\nLast sync: "))
                     append(formatDate(lastSync))
                 }
             } else {
-                append("Cloud is not connected yet.")
-                append("\nChoose the existing Investment-shared.json from Google Drive,")
-                append(" or create it there if this is your first device.")
+                append(ui("Cloud is not connected yet."))
+                append(ui("\nChoose the existing Investment-shared.json from Google Drive,"))
+                append(ui(" or create it there if this is your first device."))
             }
         }
     }
@@ -3616,7 +3829,8 @@ class MainActivity : Activity() {
                 if (isCloudAutoSyncEnabled()) "Turn Smart Sync Off" else "Turn Smart Sync On",
                 "Smart Sync Interval",
                 "Choose Different Cloud File",
-                "Disconnect Cloud File"
+                "Disconnect Cloud File",
+                "Recover Previous Cloud File"
             )
         } else {
             emptyArray()
@@ -3628,7 +3842,7 @@ class MainActivity : Activity() {
         }
 
         AlertDialog.Builder(this)
-            .setTitle("Google Drive / Cloud Backup")
+            .setTitle(ui("Google Drive / Cloud Backup"))
             .setMessage(cloudStatusText())
             .setItems(options) { _, which ->
                 if (connected) {
@@ -3656,30 +3870,31 @@ class MainActivity : Activity() {
                                 .remove(cloudLastAutoCheckKey)
                                 .apply()
                             stopSmartCloudSync()
-                            Toast.makeText(this, "Cloud backup disconnected.", Toast.LENGTH_SHORT).show()
+                            Toast.makeText(this, ui("Cloud backup disconnected."), Toast.LENGTH_SHORT).show()
                         }
+                        7 -> recoverPreviousCloudFile()
                     }
                 }
             }
-            .setNegativeButton("Close", null)
+            .setNegativeButton(ui("Close"), null)
             .show()
     }
 
     private fun showCloudFirstConnectDialog() {
         AlertDialog.Builder(this)
-            .setTitle("Connect Google Drive")
+            .setTitle(ui("Connect Google Drive"))
             .setMessage(
-                "Recommended: use the same Investment-shared.json file as Windows.\n\n" +
+                ui("Recommended: use the same Investment-shared.json file as Windows.\n\n") +
                     "On the next screen, open the menu (☰), choose Google Drive, then select " +
                     "Investment-shared.json.\n\nIf the file does not exist yet, choose Create New instead."
             )
-            .setPositiveButton("Choose Existing File") { _, _ ->
+            .setPositiveButton(ui("Choose Existing File")) { _, _ ->
                 connectExistingCloudBackup()
             }
-            .setNeutralButton("Create New") { _, _ ->
+            .setNeutralButton(ui("Create New")) { _, _ ->
                 createCloudBackupFile()
             }
-            .setNegativeButton("Cancel", null)
+            .setNegativeButton(ui("Cancel"), null)
             .show()
     }
 
@@ -3689,20 +3904,20 @@ class MainActivity : Activity() {
         val current = values.indexOf(loadCloudAutoSyncMinutes()).coerceAtLeast(0)
 
         AlertDialog.Builder(this)
-            .setTitle("Smart Sync Interval")
+            .setTitle(ui("Smart Sync Interval"))
             .setSingleChoiceItems(labels, current) { dialog, which ->
                 setCloudAutoSyncMinutes(values[which])
                 dialog.dismiss()
                 Toast.makeText(
                     this,
-                    "Smart sync set to every " + values[which] + " minutes.",
+                    ui("Smart sync set to every ") + values[which] + " minutes.",
                     Toast.LENGTH_SHORT
                 ).show()
                 if (onPortfolioScreen) {
                     showPortfolioScreen()
                 }
             }
-            .setNegativeButton("Cancel", null)
+            .setNegativeButton(ui("Cancel"), null)
             .show()
     }
 
@@ -3736,12 +3951,12 @@ class MainActivity : Activity() {
             startActivityForResult(intent, connectCloudBackupRequestCode)
         } catch (error: Exception) {
             AlertDialog.Builder(this)
-                .setTitle("File Picker Unavailable")
+                .setTitle(ui("File Picker Unavailable"))
                 .setMessage(
-                    "Android could not open the system file picker. Make sure the Google Drive app " +
+                    ui("Android could not open the system file picker. Make sure the Google Drive app ") +
                         "is installed, signed in, and enabled, then try again."
                 )
-                .setPositiveButton("OK", null)
+                .setPositiveButton(ui("OK"), null)
                 .show()
         }
     }
@@ -3766,6 +3981,7 @@ class MainActivity : Activity() {
 
         for (index in 0 until assets.length()) {
             val item = assets.optJSONObject(index) ?: continue
+            val source = item.optJSONObject("source")
             normalized.add(
                 listOf(
                     item.optString("id", ""),
@@ -3777,7 +3993,13 @@ class MainActivity : Activity() {
                     item.optDouble("target_percent", 0.0).toString(),
                     item.optBoolean("include_in_target", false).toString(),
                     item.optString("price_source", ""),
-                    item.optString("symbol", "")
+                    item.optString("symbol", ""),
+                    item.optString("source_platform", ""),
+                    source?.optString("kind", "") ?: "",
+                    source?.optString("group_id", "") ?: "",
+                    source?.optString("asset_id", "") ?: "",
+                    source?.optString("bank_id", "") ?: "",
+                    source?.optString("group_kind", "") ?: ""
                 ).joinToString("|")
             )
         }
@@ -3809,27 +4031,65 @@ class MainActivity : Activity() {
     }
 
     private fun mergedBackupDocument(existingRaw: String?): JSONObject {
-        val root = try {
-            if (existingRaw.isNullOrBlank()) JSONObject() else JSONObject(existingRaw)
-        } catch (_: Exception) {
+        val root = if (existingRaw.isNullOrBlank()) {
             JSONObject()
+        } else {
+            PortfolioSafety.validateBackup(existingRaw).also {
+                require(it.kind == PortfolioSafety.BackupKind.SHARED) {
+                    "Cloud file is not a shared portfolio. No data was overwritten."
+                }
+            }.root
         }
 
-        if (root.optString("format") != "investment.shared.portfolio") {
-            val clean = JSONObject()
-            clean.put("format", "investment.shared.portfolio")
-            clean.put("schemaVersion", 1)
-            clean.put("updatedAt", System.currentTimeMillis())
-            clean.put("sharedPortfolio", buildSharedPortfolio())
-            clean.put("androidBackup", buildAndroidBackupPayload())
-            return clean
+        val localPortfolio = buildSharedPortfolio()
+        val previousPortfolio = root.optJSONObject("sharedPortfolio")
+        val previousAssets = previousPortfolio?.optJSONArray("assets")
+        val previousById = mutableMapOf<String, JSONObject>()
+        if (previousAssets != null) {
+            for (index in 0 until previousAssets.length()) {
+                val item = previousAssets.optJSONObject(index) ?: continue
+                previousById[sharedAssetKey(item)] = item
+            }
         }
+        val localAssets = localPortfolio.getJSONArray("assets")
+        val mergedAssets = JSONArray()
+        for (index in 0 until localAssets.length()) {
+            val localAsset = localAssets.getJSONObject(index)
+            val preserved = previousById[sharedAssetKey(localAsset)]
+            val merged = if (preserved == null) JSONObject() else JSONObject(preserved.toString())
+            for (key in localAsset.keys()) {
+                merged.put(key, localAsset.get(key))
+            }
+            mergedAssets.put(merged)
+        }
+        val mergedPortfolio = if (previousPortfolio == null) {
+            JSONObject()
+        } else {
+            JSONObject(previousPortfolio.toString())
+        }
+        mergedPortfolio.put("currency", "Toman")
+        mergedPortfolio.put("assets", mergedAssets)
+        mergedPortfolio.put("rebalance_tolerance_percent", loadTolerance())
 
-        root.put("format", "investment.shared.portfolio")
-        root.put("schemaVersion", 1)
+        root.put("format", PortfolioSafety.SHARED_FORMAT)
+        root.put("schemaVersion", PortfolioSafety.SHARED_SCHEMA_VERSION)
         root.put("updatedAt", System.currentTimeMillis())
-        root.put("sharedPortfolio", buildSharedPortfolio())
-        root.put("androidBackup", buildAndroidBackupPayload())
+        root.put("sharedPortfolio", mergedPortfolio)
+        val localSupplement = buildAndroidBackupPayload()
+        val remoteSupplement = root.optJSONObject("androidBackup")
+        if (remoteSupplement != null) {
+            for ((key, identity) in listOf("transactions" to "id", "snapshots" to "timestamp")) {
+                localSupplement.put(
+                    key,
+                    PortfolioSafety.mergeHistory(
+                        localSupplement.optJSONArray(key) ?: JSONArray(),
+                        remoteSupplement.optJSONArray(key) ?: JSONArray(),
+                        identity
+                    )
+                )
+            }
+        }
+        root.put("androidBackup", PortfolioSafety.preserveSupplementalFields(localSupplement, remoteSupplement))
         return root
     }
 
@@ -3850,6 +4110,7 @@ class MainActivity : Activity() {
             val assets = portfolio.optJSONArray("assets") ?: JSONArray()
             for (index in 0 until assets.length()) {
                 val item = assets.optJSONObject(index) ?: continue
+                val source = item.optJSONObject("source")
                 val normalized = listOf(
                     item.optString("name", ""),
                     item.optString("category", ""),
@@ -3859,7 +4120,13 @@ class MainActivity : Activity() {
                     item.optDouble("target_percent", 0.0).toString(),
                     item.optBoolean("include_in_target", false).toString(),
                     item.optString("price_source", ""),
-                    item.optString("symbol", "")
+                    item.optString("symbol", ""),
+                    item.optString("source_platform", ""),
+                    source?.optString("kind", "") ?: "",
+                    source?.optString("group_id", "") ?: "",
+                    source?.optString("asset_id", "") ?: "",
+                    source?.optString("bank_id", "") ?: "",
+                    source?.optString("group_kind", "") ?: ""
                 ).joinToString("|")
                 result[sharedAssetKey(item)] = normalized
             }
@@ -3894,6 +4161,141 @@ class MainActivity : Activity() {
         )
     }
 
+    private fun <T> runStorageOperation(
+        label: String,
+        showWorking: Boolean = true,
+        task: () -> T,
+        onSuccess: (T) -> Unit,
+        onFailure: (Exception) -> Unit
+    ) {
+        if (priceUpdateInProgress.get() || !cloudOperationInProgress.compareAndSet(false, true)) {
+            if (showWorking) {
+                Toast.makeText(this, ui("Another backup or sync operation is still running."), Toast.LENGTH_SHORT).show()
+            }
+            return
+        }
+
+        if (showWorking) {
+            Toast.makeText(this, ui(label) + "…", Toast.LENGTH_SHORT).show()
+        }
+
+        try {
+            cloudExecutor.execute {
+                try {
+                    val result = task()
+                    runOnUiThread {
+                        cloudOperationInProgress.set(false)
+                        if (!isFinishing && !isDestroyed) {
+                            onSuccess(result)
+                        }
+                    }
+                } catch (error: Exception) {
+                    runOnUiThread {
+                        cloudOperationInProgress.set(false)
+                        if (!isFinishing && !isDestroyed) {
+                            onFailure(error)
+                        }
+                    }
+                }
+            }
+        } catch (error: Exception) {
+            cloudOperationInProgress.set(false)
+            onFailure(error)
+        }
+    }
+
+    private fun readUriText(uri: android.net.Uri): String {
+        val stream = contentResolver.openInputStream(uri)
+            ?: throw IllegalStateException("Could not read the selected file.")
+        return stream.bufferedReader().use { reader ->
+            val buffer = CharArray(8192)
+            val result = StringBuilder()
+            while (true) {
+                val count = reader.read(buffer)
+                if (count < 0) break
+                require(result.length + count <= 20_000_000) {
+                    "Backup exceeds the 20 MB safety limit. Nothing was changed."
+                }
+                result.append(buffer, 0, count)
+            }
+            result.toString()
+        }
+    }
+
+    private fun writeUriText(uri: android.net.Uri, raw: String) {
+        val stream = contentResolver.openOutputStream(uri, "wt")
+            ?: throw IllegalStateException("Could not open the selected file for writing.")
+        stream.bufferedWriter().use { writer ->
+            writer.write(raw)
+            writer.flush()
+        }
+    }
+
+    private fun preserveCloudBeforeWrite(uri: android.net.Uri, raw: String) {
+        PortfolioSafety.validateBackup(raw).also {
+            require(it.kind == PortfolioSafety.BackupKind.SHARED)
+        }
+        val file = AtomicFile(File(filesDir, cloudPreWriteFileName))
+        val payload = JSONObject().put("uri", uri.toString()).put("raw", raw)
+            .toString().toByteArray(Charsets.UTF_8)
+        val stream = file.startWrite()
+        try {
+            stream.write(payload)
+            file.finishWrite(stream)
+        } catch (error: Exception) {
+            file.failWrite(stream)
+            throw error
+        }
+    }
+
+    private fun recoverPreviousCloudFile() {
+        val uri = loadCloudBackupUri() ?: return
+        AlertDialog.Builder(this)
+            .setTitle(ui("Recover Previous Cloud File"))
+            .setMessage(ui("Recover only if the connected cloud file is damaged. A valid cloud file will not be replaced."))
+            .setNegativeButton(ui("Cancel"), null)
+            .setPositiveButton(ui("Recover")) { _, _ ->
+                runStorageOperation(
+                    label = "Recovering cloud file",
+                    task = {
+                        val file = AtomicFile(File(filesDir, cloudPreWriteFileName))
+                        val saved = JSONObject(file.openRead().bufferedReader().use { it.readText() })
+                        require(saved.optString("uri") == uri.toString()) {
+                            "Recovery copy belongs to another cloud file."
+                        }
+                        val raw = saved.getString("raw")
+                        PortfolioSafety.validateBackup(raw).also {
+                            require(it.kind == PortfolioSafety.BackupKind.SHARED)
+                        }
+                        val current = readUriText(uri)
+                        val currentValid = try {
+                            PortfolioSafety.validateBackup(current).kind == PortfolioSafety.BackupKind.SHARED
+                        } catch (_: Exception) {
+                            false
+                        }
+                        require(!currentValid) {
+                            "Connected cloud file is valid; recovery did not overwrite it."
+                        }
+                        writeUriText(uri, raw)
+                        check(readUriText(uri) == raw) { "Cloud provider did not confirm the restored file." }
+                        Unit
+                    },
+                    onSuccess = {
+                        Toast.makeText(this, ui("Previous cloud file recovered."), Toast.LENGTH_LONG).show()
+                    },
+                    onFailure = { showCloudAccessError("Cloud Recovery Failed", it.message ?: "Recovery failed.") }
+                )
+            }
+            .show()
+    }
+
+    private data class SmartSyncResult(
+        val raw: String,
+        val remote: JSONObject,
+        val local: JSONObject,
+        val decision: PortfolioSafety.SyncDecision
+    )
+
     private fun smartCloudSyncCheck() {
         if (!isCloudAutoSyncEnabled()) {
             return
@@ -3908,78 +4310,101 @@ class MainActivity : Activity() {
             return
         }
 
-        try {
-            val raw = contentResolver.openInputStream(uri)
-                ?.bufferedReader()
-                ?.use { it.readText() }
-                ?: return
-            val root = JSONObject(raw)
-            if (root.optString("format") != "investment.shared.portfolio" ||
-                root.optInt("schemaVersion", -1) != 1
-            ) {
-                return
-            }
-            val remote = root.optJSONObject("sharedPortfolio") ?: return
-            // Only record a completed auto-check after the cloud file was read and
-            // validated successfully. Transient provider failures can then retry on
-            // the next resume instead of being suppressed for the whole interval.
-            prefs.edit().putLong(cloudLastAutoCheckKey, now).apply()
-            val local = buildSharedPortfolio()
-            val baseline = prefs.getString(cloudSharedFingerprintKey, null) ?: return
-            val localFingerprint = sharedFingerprint(local)
-            val remoteFingerprint = sharedFingerprint(remote)
-
-            when {
-                localFingerprint == remoteFingerprint -> {
-                    // Both copies already agree. Refresh the baseline too; otherwise an
-                    // old baseline can make the next one-sided edit look like a conflict.
-                    saveCloudBaseline(remote)
-                    markCloudSync()
+        runStorageOperation(
+            label = "Checking cloud",
+            showWorking = false,
+            task = {
+                val raw = readUriText(uri)
+                val validated = PortfolioSafety.validateBackup(raw)
+                require(validated.kind == PortfolioSafety.BackupKind.SHARED) {
+                    "Connected cloud file is not a shared portfolio."
                 }
-                localFingerprint == baseline && remoteFingerprint != baseline -> {
-                    restoreBackupJson(raw)
-                    saveCloudBaseline(remote)
-                    markCloudSync()
-                    Toast.makeText(this, "Cloud changes loaded.", Toast.LENGTH_SHORT).show()
-                    showPortfolioScreen()
-                }
-                localFingerprint != baseline && remoteFingerprint == baseline -> {
-                    syncToCloud()
-                }
-                else -> {
-                    val changedRows = sharedChangeCount(local, remote)
-                    AlertDialog.Builder(this)
-                        .setTitle("Cloud Sync Conflict")
-                        .setMessage(
-                            "Smart sync found changes on both Phone and Cloud. " +
-                                changedRows + " asset row(s) differ. Nothing was overwritten."
-                        )
-                        .setNegativeButton("Later", null)
-                        .setNeutralButton("Use Cloud") { _, _ -> loadFromCloud() }
-                        .setPositiveButton("Use Phone") { _, _ ->
-                            syncToCloud(forcePhoneData = true)
+                val remote = validated.sharedPortfolio
+                    ?: throw IllegalArgumentException("Shared portfolio data is missing.")
+                val local = buildSharedPortfolio()
+                val baseline = prefs.getString(cloudSharedFingerprintKey, null)
+                SmartSyncResult(
+                    raw = raw,
+                    remote = remote,
+                    local = local,
+                    decision = PortfolioSafety.decideSync(
+                        sharedFingerprint(local),
+                        sharedFingerprint(remote),
+                        baseline
+                    )
+                )
+            },
+            onSuccess = { result ->
+                // A check is throttled only after a complete, valid provider read.
+                prefs.edit().putLong(cloudLastAutoCheckKey, now).apply()
+                when (result.decision) {
+                    PortfolioSafety.SyncDecision.MATCH -> {
+                        val remoteHistory = JSONObject(result.raw).optJSONObject("androidBackup")
+                        val historyMatches = try {
+                            PortfolioSafety.historyEquivalent(buildAndroidBackupPayload(), remoteHistory)
+                        } catch (_: IllegalArgumentException) {
+                            false  // Report a conflict rather than crashing the UI callback.
                         }
-                        .show()
+                        if (historyMatches) {
+                            saveCloudBaseline(result.remote)
+                            markCloudSync()
+                        } else {
+                            Toast.makeText(
+                                this,
+                                ui("Portfolio holdings match, but Android history differs. Use Cloud Sync to resolve it; no data was overwritten."),
+                                Toast.LENGTH_LONG
+                            ).show()
+                        }
+                    }
+                    PortfolioSafety.SyncDecision.LOAD_REMOTE -> {
+                        applyCloudRaw(result.raw, sharedFingerprint(result.local))
+                    }
+                    PortfolioSafety.SyncDecision.UPLOAD_LOCAL -> syncToCloud()
+                    PortfolioSafety.SyncDecision.FIRST_SYNC_CONFLICT,
+                    PortfolioSafety.SyncDecision.CONFLICT -> {
+                        val changedRows = sharedChangeCount(result.local, result.remote)
+                        AlertDialog.Builder(this)
+                            .setTitle(ui("Cloud Sync Conflict"))
+                            .setMessage(
+                                ui("Smart sync found changes on both Phone and Cloud. ") +
+                                    changedRows + ui(" asset row(s) differ. Nothing was overwritten.")
+                            )
+                            .setNegativeButton(ui("Later"), null)
+                            .setNeutralButton(ui("Use Cloud")) { _, _ -> loadFromCloud() }
+                            .setPositiveButton(ui("Use Phone")) { _, _ ->
+                                syncToCloud(forcePhoneData = true)
+                            }
+                            .show()
+                    }
                 }
+            },
+            onFailure = {
+                // Smart sync remains best-effort and retries on the next scheduled check.
             }
-        } catch (_: Exception) {
-            // Resume sync is best-effort. Manual Cloud Status shows actionable errors.
-        }
+        )
     }
 
     private fun showCloudAccessError(title: String, message: String) {
         AlertDialog.Builder(this)
-            .setTitle(title)
+            .setTitle(ui(title))
             .setMessage(
-                message +
-                    "\n\nIf the Google Drive file was moved, removed, or access expired, reconnect it."
+                ui(message) +
+                    "\n\n" + ui("If the Google Drive file was moved, removed, or access expired, reconnect it.")
             )
-            .setNegativeButton("Close", null)
-            .setPositiveButton("Reconnect") { _, _ ->
+            .setNegativeButton(ui("Close"), null)
+            .setPositiveButton(ui("Reconnect")) { _, _ ->
                 connectExistingCloudBackup()
             }
             .show()
     }
+
+    private data class CloudStatusResult(
+        val local: JSONObject,
+        val remote: JSONObject,
+        val baseline: String?,
+        val localFingerprint: String,
+        val remoteFingerprint: String
+    )
 
     private fun checkCloudStatus() {
         val uri = loadCloudBackupUri()
@@ -3988,64 +4413,88 @@ class MainActivity : Activity() {
             return
         }
 
-        try {
-            val raw = contentResolver.openInputStream(uri)
-                ?.bufferedReader()
-                ?.use { it.readText() }
-                ?: throw IllegalStateException("Could not read the connected cloud file.")
-            val root = JSONObject(raw)
-            if (root.optString("format") != "investment.shared.portfolio" ||
-                root.optInt("schemaVersion", -1) != 1
-            ) {
-                throw IllegalArgumentException("The connected file has an unsupported shared portfolio schema.")
-            }
-            val remote = root.optJSONObject("sharedPortfolio")
-                ?: throw IllegalArgumentException("Shared portfolio data is missing.")
-            val local = buildSharedPortfolio()
-            val prefs = getSharedPreferences(prefsName, MODE_PRIVATE)
-            val baseline = prefs.getString(cloudSharedFingerprintKey, null)
-            val localFingerprint = sharedFingerprint(local)
-            val remoteFingerprint = sharedFingerprint(remote)
-
-            if (localFingerprint == remoteFingerprint && baseline != localFingerprint) {
-                saveCloudBaseline(remote)
-                markCloudSync()
-            }
-
-            val state = when {
-                localFingerprint == remoteFingerprint -> "Phone and Cloud match."
-                baseline.isNullOrBlank() -> "First sync needs a choice."
-                localFingerprint != baseline && remoteFingerprint != baseline ->
-                    "Conflict: both Phone and Cloud changed."
-                remoteFingerprint != baseline -> "Cloud has newer/different portfolio data."
-                localFingerprint != baseline -> "Phone has changes waiting to upload."
-                else -> "Phone and Cloud differ."
-            }
-
-            val changed = if (localFingerprint == remoteFingerprint) {
-                0
-            } else {
-                sharedChangeCount(local, remote)
-            }
-
-            AlertDialog.Builder(this)
-                .setTitle("Cloud Status")
-                .setMessage(
-                    state +
-                        "\n\nPhone: " + sharedPortfolioSummary(local) +
-                        "\nCloud: " + sharedPortfolioSummary(remote) +
-                        "\nChanged asset rows: " + changed
+        runStorageOperation(
+            label = "Checking cloud status",
+            task = {
+                val validated = PortfolioSafety.validateBackup(readUriText(uri))
+                require(validated.kind == PortfolioSafety.BackupKind.SHARED) {
+                    "Connected file is not a shared portfolio."
+                }
+                val remote = validated.sharedPortfolio
+                    ?: throw IllegalArgumentException("Shared portfolio data is missing.")
+                val local = buildSharedPortfolio()
+                val baseline = getSharedPreferences(prefsName, MODE_PRIVATE)
+                    .getString(cloudSharedFingerprintKey, null)
+                CloudStatusResult(
+                    local = local,
+                    remote = remote,
+                    baseline = baseline,
+                    localFingerprint = sharedFingerprint(local),
+                    remoteFingerprint = sharedFingerprint(remote)
                 )
-                .setNegativeButton("Close", null)
-                .setPositiveButton("Sync Now") { _, _ -> syncToCloud() }
-                .show()
-        } catch (error: Exception) {
-            showCloudAccessError(
-                "Cloud Status Failed",
-                error.message ?: "Could not check the cloud file."
-            )
-        }
+            },
+            onSuccess = { result ->
+                if (
+                    result.localFingerprint == result.remoteFingerprint &&
+                    result.baseline != result.localFingerprint
+                ) {
+                    saveCloudBaseline(result.remote)
+                    markCloudSync()
+                }
+                val state = when (
+                    PortfolioSafety.decideSync(
+                        result.localFingerprint,
+                        result.remoteFingerprint,
+                        result.baseline
+                    )
+                ) {
+                    PortfolioSafety.SyncDecision.MATCH -> "Phone and Cloud match."
+                    PortfolioSafety.SyncDecision.FIRST_SYNC_CONFLICT -> "First sync needs a choice."
+                    PortfolioSafety.SyncDecision.LOAD_REMOTE -> "Cloud has newer/different portfolio data."
+                    PortfolioSafety.SyncDecision.UPLOAD_LOCAL -> "Phone has changes waiting to upload."
+                    PortfolioSafety.SyncDecision.CONFLICT -> "Conflict: both Phone and Cloud changed."
+                }
+                val changed = if (result.localFingerprint == result.remoteFingerprint) {
+                    0
+                } else {
+                    sharedChangeCount(result.local, result.remote)
+                }
+                AlertDialog.Builder(this)
+                    .setTitle(ui("Cloud Status"))
+                    .setMessage(
+                        ui(state) +
+                            "\n\n" + ui("Phone: ") + sharedPortfolioSummary(result.local) +
+                            "\n" + ui("Cloud: ") + sharedPortfolioSummary(result.remote) +
+                            "\n" + ui("Changed asset rows: ") + changed
+                    )
+                    .setNegativeButton(ui("Close"), null)
+                    .setPositiveButton(ui("Sync Now")) { _, _ -> syncToCloud() }
+                    .show()
+            },
+            onFailure = { error ->
+                showCloudAccessError(
+                    "Cloud Status Failed",
+                    error.message ?: "Could not check the cloud file."
+                )
+            }
+        )
     }
+
+    private enum class CloudSyncAction {
+        MATCH,
+        UPLOADED,
+        LOAD_REMOTE,
+        CONFLICT
+    }
+
+    private data class CloudSyncResult(
+        val action: CloudSyncAction,
+        val raw: String? = null,
+        val local: JSONObject? = null,
+        val remote: JSONObject? = null,
+        val savedPortfolio: JSONObject? = null,
+        val historyOnly: Boolean = false
+    )
 
     private fun syncToCloud(forcePhoneData: Boolean = false) {
         val uri = loadCloudBackupUri()
@@ -4054,122 +4503,148 @@ class MainActivity : Activity() {
             return
         }
 
-        try {
-            val existingRaw = contentResolver.openInputStream(uri)
-                ?.bufferedReader()
-                ?.use { it.readText() }
-
-            // Never interpret malformed or incompatible cloud data as an empty
-            // file: doing so could overwrite a valid desktop/phone backup.
-            val existingRoot = if (existingRaw.isNullOrBlank()) {
-                null
-            } else {
-                try {
-                    JSONObject(existingRaw)
-                } catch (_: Exception) {
-                    throw IllegalArgumentException(
-                        "Cloud file is not valid JSON. No data was overwritten."
+        runStorageOperation(
+            label = "Syncing safely",
+            task = {
+                val existingRaw = readUriText(uri)
+                val validated = PortfolioSafety.validateBackup(existingRaw).also {
+                    require(it.kind == PortfolioSafety.BackupKind.SHARED) {
+                        "Cloud file is not a shared portfolio. No data was overwritten."
+                    }
+                }
+                val remoteShared = validated.sharedPortfolio
+                val localShared = buildSharedPortfolio()
+                if (remoteShared != null) {
+                    PortfolioSafety.ensureSafeReplacement(
+                        remoteShared.getJSONArray("assets").length(),
+                        localShared.getJSONArray("assets").length()
                     )
                 }
-            }
-            if (existingRoot != null && (
-                    existingRoot.optString("format") != "investment.shared.portfolio" ||
-                        existingRoot.optJSONObject("sharedPortfolio") == null ||
-                        existingRoot.optInt("schemaVersion", -1) != 1
-                    )
-            ) {
-                throw IllegalArgumentException(
-                    "Cloud backup format is missing or unsupported. No data was overwritten."
+
+                if (!forcePhoneData && remoteShared != null) {
+                    val baseline = getSharedPreferences(prefsName, MODE_PRIVATE)
+                        .getString(cloudSharedFingerprintKey, null)
+                    when (
+                        PortfolioSafety.decideSync(
+                            sharedFingerprint(localShared),
+                            sharedFingerprint(remoteShared),
+                            baseline
+                        )
+                    ) {
+                        PortfolioSafety.SyncDecision.MATCH -> {
+                            val historyMatches = PortfolioSafety.historyEquivalent(
+                                buildAndroidBackupPayload(), validated.androidPayload
+                            )
+                            return@runStorageOperation if (historyMatches) {
+                                CloudSyncResult(
+                                    action = CloudSyncAction.MATCH,
+                                    remote = remoteShared
+                                )
+                            } else {
+                                CloudSyncResult(
+                                    action = CloudSyncAction.CONFLICT,
+                                    local = localShared,
+                                    remote = remoteShared,
+                                    historyOnly = true
+                                )
+                            }
+                        }
+                        PortfolioSafety.SyncDecision.LOAD_REMOTE ->
+                            return@runStorageOperation CloudSyncResult(
+                                action = CloudSyncAction.LOAD_REMOTE,
+                                raw = existingRaw,
+                                local = localShared,
+                                remote = remoteShared
+                            )
+                        PortfolioSafety.SyncDecision.FIRST_SYNC_CONFLICT,
+                        PortfolioSafety.SyncDecision.CONFLICT ->
+                            return@runStorageOperation CloudSyncResult(
+                                action = CloudSyncAction.CONFLICT,
+                                local = localShared,
+                                remote = remoteShared
+                            )
+                        PortfolioSafety.SyncDecision.UPLOAD_LOCAL -> Unit
+                    }
+                }
+
+                val document = mergedBackupDocument(existingRaw)
+                preserveCloudBeforeWrite(uri, existingRaw)
+                PortfolioSafety.requireUnchangedCloudFile(existingRaw, readUriText(uri))
+                val writtenRaw = document.toString(2)
+                PortfolioSafety.writeAndVerifyBackup(
+                    writtenRaw,
+                    write = { writeUriText(uri, it) },
+                    read = { readUriText(uri) }
+                )
+                CloudSyncResult(
+                    action = CloudSyncAction.UPLOADED,
+                    savedPortfolio = document.getJSONObject("sharedPortfolio")
+                )
+            },
+            onSuccess = { result ->
+                when (result.action) {
+                    CloudSyncAction.MATCH -> {
+                        result.remote?.let(::saveCloudBaseline)
+                        markCloudSync()
+                        Toast.makeText(this, ui("Phone and Cloud already match."), Toast.LENGTH_SHORT).show()
+                        if (onPortfolioScreen) showPortfolioScreen()
+                    }
+                    CloudSyncAction.UPLOADED -> {
+                        result.savedPortfolio?.let(::saveCloudBaseline)
+                        markCloudSync()
+                        Toast.makeText(this, ui("Cloud backup updated safely."), Toast.LENGTH_SHORT).show()
+                        if (onPortfolioScreen) showPortfolioScreen()
+                    }
+                    CloudSyncAction.LOAD_REMOTE -> {
+                        val expectedLocal = result.local?.let(::sharedFingerprint)
+                        applyCloudRaw(
+                            result.raw ?: throw IllegalStateException("Cloud data is missing."),
+                            expectedLocal
+                        )
+                    }
+                    CloudSyncAction.CONFLICT -> {
+                        val local = result.local
+                            ?: throw IllegalStateException("Phone comparison data is missing.")
+                        val remote = result.remote
+                            ?: throw IllegalStateException("Cloud comparison data is missing.")
+                        val changedRows = sharedChangeCount(local, remote)
+                        val message = if (result.historyOnly) {
+                            ui("Portfolio holdings match, but Android history differs. No data was overwritten. Choose which history to reconcile.")
+                        } else {
+                            ui("Both copies may contain changes. ") + changedRows +
+                                ui(" asset row(s) differ. Nothing was overwritten. ") +
+                                ui("Choose which portfolio to keep.")
+                        }
+                        AlertDialog.Builder(this)
+                            .setTitle(ui("Cloud Sync Conflict"))
+                            .setMessage(message)
+                            .setNegativeButton(ui("Cancel"), null)
+                            .setNeutralButton(ui("Use Cloud")) { _, _ -> loadFromCloud() }
+                            .setPositiveButton(ui("Use Phone")) { _, _ ->
+                                syncToCloud(forcePhoneData = true)
+                            }
+                            .show()
+                    }
+                }
+            },
+            onFailure = { error ->
+                showCloudAccessError(
+                    "Cloud Sync Failed",
+                    error.message ?: "Could not write the backup file."
                 )
             }
-
-            val remoteShared = existingRoot?.optJSONObject("sharedPortfolio")
-
-            val localShared = buildSharedPortfolio()
-            val prefs = getSharedPreferences(prefsName, MODE_PRIVATE)
-            val baseline = prefs.getString(cloudSharedFingerprintKey, null)
-            val localFingerprint = sharedFingerprint(localShared)
-            val remoteFingerprint = remoteShared?.let { sharedFingerprint(it) }
-
-            if (
-                !forcePhoneData &&
-                remoteShared != null &&
-                remoteFingerprint == localFingerprint
-            ) {
-                // The portfolio is already identical on both sides. Treat this as a
-                // successful sync and re-anchor the baseline instead of reporting a
-                // false "both changed" conflict from an older baseline.
-                saveCloudBaseline(remoteShared)
-                markCloudSync()
-                Toast.makeText(this, "Phone and Cloud already match.", Toast.LENGTH_SHORT).show()
-                if (onPortfolioScreen) {
-                    showPortfolioScreen()
-                }
-                return
-            }
-
-            if (!forcePhoneData && remoteShared != null) {
-                val remoteChanged = baseline != null && remoteFingerprint != baseline
-                val localChanged = baseline != null && localFingerprint != baseline
-                val firstSyncConflict = baseline == null && remoteFingerprint != localFingerprint
-
-                if ((remoteChanged && localChanged) || firstSyncConflict) {
-                    val changedRows = sharedChangeCount(localShared, remoteShared)
-                    AlertDialog.Builder(this)
-                        .setTitle("Cloud Sync Conflict")
-                        .setMessage(
-                            "Both copies may contain changes. " + changedRows +
-                                " asset row(s) differ. Choose which portfolio to keep. " +
-                                "Platform-specific Windows/Android data will still be preserved."
-                        )
-                        .setNegativeButton("Cancel", null)
-                        .setNeutralButton("Use Cloud") { _, _ ->
-                            loadFromCloud()
-                        }
-                        .setPositiveButton("Use Phone") { _, _ ->
-                            syncToCloud(forcePhoneData = true)
-                        }
-                        .show()
-                    return
-                }
-
-                if (remoteChanged && !localChanged) {
-                    loadFromCloud()
-                    return
-                }
-            }
-
-            val document = mergedBackupDocument(existingRaw)
-            val stream = contentResolver.openOutputStream(uri, "wt")
-                ?: throw IllegalStateException("Could not open the cloud backup file for writing.")
-
-            stream.bufferedWriter().use { writer ->
-                writer.write(document.toString(2))
-            }
-
-            saveCloudBaseline(document.getJSONObject("sharedPortfolio"))
-            markCloudSync()
-            Toast.makeText(this, "Cloud backup updated safely.", Toast.LENGTH_SHORT).show()
-            if (onPortfolioScreen) {
-                showPortfolioScreen()
-            }
-        } catch (error: Exception) {
-            showCloudAccessError(
-                "Cloud Sync Failed",
-                error.message ?: "Could not write the backup file."
-            )
-        }
+        )
     }
 
     private fun confirmLoadFromCloud() {
         AlertDialog.Builder(this)
-            .setTitle("Load from Cloud?")
+            .setTitle(ui("Load from Cloud?"))
             .setMessage(
-                "This will apply the shared portfolio from Cloud. Android history and settings " +
+                ui("This will apply the shared portfolio from Cloud. Android history and settings ") +
                     "are kept when available, and an Undo checkpoint is created first."
             )
-            .setNegativeButton("Cancel", null)
-            .setPositiveButton("Load") { _, _ -> loadFromCloud() }
+            .setNegativeButton(ui("Cancel"), null)
+            .setPositiveButton(ui("Load")) { _, _ -> loadFromCloud() }
             .show()
     }
 
@@ -4180,37 +4655,90 @@ class MainActivity : Activity() {
             return
         }
 
-        try {
-            val raw = contentResolver.openInputStream(uri)?.bufferedReader()?.use { it.readText() }
-                ?: throw IllegalStateException("Could not read the cloud backup file.")
+        val expectedLocalFingerprint = sharedFingerprint(buildSharedPortfolio())
+        runStorageOperation(
+            label = "Loading cloud data",
+            task = {
+                val raw = readUriText(uri)
+                val validated = PortfolioSafety.validateBackup(raw)
+                require(validated.kind == PortfolioSafety.BackupKind.SHARED) {
+                    "Connected cloud file is not a shared portfolio."
+                }
+                raw
+            },
+            onSuccess = { raw -> applyCloudRaw(raw, expectedLocalFingerprint) },
+            onFailure = { error ->
+                showCloudAccessError(
+                    "Cloud Load Failed",
+                    error.message ?: "Could not read the backup file."
+                )
+            }
+        )
+    }
 
-            val root = JSONObject(raw)
-            restoreBackupJson(raw)
-            root.takeIf { it.optString("format") == "investment.shared.portfolio" }
-                ?.optJSONObject("sharedPortfolio")
-                ?.let { saveCloudBaseline(it) }
+    private fun applyCloudRaw(raw: String, expectedLocalFingerprint: String? = null) {
+        try {
+            if (
+                expectedLocalFingerprint != null &&
+                sharedFingerprint(buildSharedPortfolio()) != expectedLocalFingerprint
+            ) {
+                throw IllegalStateException(
+                    "Phone data changed while sync was running. Nothing was overwritten; run sync again."
+                )
+            }
+            val validated = PortfolioSafety.validateBackup(raw)
+            require(validated.kind == PortfolioSafety.BackupKind.SHARED) {
+                "Connected cloud file is not a shared portfolio."
+            }
+            restoreBackupJson(raw, mergeLocalHistory = true)
+            validated.sharedPortfolio?.let(::saveCloudBaseline)
             markCloudSync()
-            Toast.makeText(this, "Cloud backup loaded.", Toast.LENGTH_SHORT).show()
+            Toast.makeText(this, ui("Cloud backup loaded safely."), Toast.LENGTH_SHORT).show()
             showPortfolioScreen()
         } catch (error: Exception) {
             showCloudAccessError(
                 "Cloud Load Failed",
-                error.message ?: "Could not read the backup file."
+                error.message ?: "Could not apply the backup file."
             )
         }
     }
 
     private fun showBackupDialog() {
+        val hasRecovery = getSharedPreferences(prefsName, MODE_PRIVATE)
+            .contains(preRestoreBackupKey)
+        val options = if (hasRecovery) {
+            arrayOf("Export Backup", "Import Backup", "Restore Previous Local Data")
+        } else {
+            arrayOf("Export Backup", "Import Backup")
+        }.map(::ui).toTypedArray()
         AlertDialog.Builder(this)
-            .setTitle("Backup / Restore")
-            .setItems(arrayOf("Export Backup", "Import Backup")) { _, which ->
-                if (which == 0) {
-                    exportBackup()
-                } else {
-                    importBackup()
+            .setTitle(ui("Backup / Restore"))
+            .setItems(options) { _, which ->
+                when (which) {
+                    0 -> exportBackup()
+                    1 -> importBackup()
+                    2 -> AlertDialog.Builder(this)
+                        .setTitle(ui("Restore Previous Local Data?"))
+                        .setMessage(ui("This recovers the local portfolio preserved immediately before the last import or cloud restore."))
+                        .setNegativeButton(ui("Cancel"), null)
+                        .setPositiveButton(ui("Restore")) { _, _ ->
+                            try {
+                                pushUndoCheckpoint()
+                                restorePreviousLocalState()
+                                Toast.makeText(this, ui("Previous local data restored."), Toast.LENGTH_SHORT).show()
+                                showPortfolioScreen()
+                            } catch (error: Exception) {
+                                AlertDialog.Builder(this)
+                                    .setTitle(ui("Recovery Failed"))
+                                    .setMessage(ui(error.message ?: "Could not restore previous local data."))
+                                    .setPositiveButton(ui("OK"), null)
+                                    .show()
+                            }
+                        }
+                        .show()
                 }
             }
-            .setNegativeButton("Cancel", null)
+            .setNegativeButton(ui("Cancel"), null)
             .show()
     }
 
@@ -4226,7 +4754,7 @@ class MainActivity : Activity() {
     private fun importBackup() {
         val intent = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
             addCategory(Intent.CATEGORY_OPENABLE)
-            type = "application/json"
+            type = "*/*"
         }
         startActivityForResult(intent, importBackupRequestCode)
     }
@@ -4322,7 +4850,7 @@ class MainActivity : Activity() {
         val folded = raw.lowercase(Locale.US)
         val source = item.optJSONObject("source")
         val sourceGroup = source?.optString("group_id", "")?.trim()?.lowercase(Locale.US) ?: ""
-        val sourceKind = source?.optString("group_kind", "")?.trim()?.lowercase(Locale.US) ?: ""
+        val sourceKind = source?.optString("kind", "")?.trim()?.lowercase(Locale.US) ?: ""
 
         val cashAliases = setOf("cash", "cash & currencies", "cash and currencies", "currencies", "currency", "bank", "banks")
         val cryptoAliases = setOf("crypto", "cryptocurrency", "cryptocurrencies")
@@ -4371,7 +4899,16 @@ class MainActivity : Activity() {
         return "name:" + category.lowercase(Locale.US) + ":" + name.lowercase(Locale.US)
     }
 
-    private fun importSharedPortfolio(portfolio: JSONObject) {
+    private data class SharedImportPlan(
+        val assets: List<Asset>,
+        val categories: List<String>,
+        val tolerance: Double
+    )
+
+    private fun buildSharedImportPlan(
+        portfolio: JSONObject,
+        supplemental: JSONObject?
+    ): SharedImportPlan {
         val rawAssets = portfolio.optJSONArray("assets")
             ?: throw IllegalArgumentException("Shared portfolio does not contain assets.")
 
@@ -4382,10 +4919,15 @@ class MainActivity : Activity() {
             val item = rawAssets.getJSONObject(index)
             val name = item.optString("name", "Asset").trim().ifBlank { "Asset" }
             val category = canonicalSharedCategory(item)
-            val quantity = item.optDouble("quantity", 1.0).coerceAtLeast(0.0)
-            val price = item.optDouble("price_toman", 0.0).coerceAtLeast(0.0)
-            val averageCost = item.optDouble("average_cost_toman", price).coerceAtLeast(0.0)
-            val target = item.optDouble("target_percent", 0.0).coerceIn(0.0, 100.0)
+            val quantity = item.getDouble("quantity")
+            PortfolioSafety.requireSafeCashQuantity(category, quantity)
+            val price = item.getDouble("price_toman")
+            val averageCost = if (item.has("average_cost_toman")) {
+                item.getDouble("average_cost_toman")
+            } else {
+                price
+            }
+            val target = item.optDouble("target_percent", 0.0)
             val included = item.optBoolean("include_in_target", target > 0.0)
             val symbol = item.optString("symbol", "").trim().uppercase(Locale.US)
             val source = item.optString("price_source", "Manual").let {
@@ -4400,7 +4942,7 @@ class MainActivity : Activity() {
             val importedAsset = Asset(
                 name = name,
                 category = category,
-                quantity = if (category == "Cash") 1.0 else quantity.coerceAtLeast(0.0000001),
+                quantity = if (category == "Cash") 1.0 else quantity,
                 price = price,
                 averageCost = if (category == "Cash") price else averageCost,
                 targetPercent = target,
@@ -4418,51 +4960,96 @@ class MainActivity : Activity() {
             importedByKey[sharedImportKey(item, category, name, symbol)] = importedAsset
         }
 
-        val imported = importedByKey.values.toMutableList()
-        val sharedTolerance = portfolio.optDouble(
-            "rebalance_tolerance_percent",
-            loadTolerance()
-        ).coerceIn(0.0, 20.0)
-
-        pushUndoCheckpoint()
-        saveAssets(imported)
-        saveCategories(categories)
-        saveTolerance(sharedTolerance)
-        recordSnapshot(imported)
-    }
-
-    private fun restoreAndroidSupplementalPayload(root: JSONObject) {
-        val transactions = root.optJSONArray("transactions") ?: JSONArray()
-        val snapshots = root.optJSONArray("snapshots") ?: JSONArray()
-        val displayUnit = root.optString("displayUnit", loadDisplayUnit())
-        val summaryPeriod = root.optString("summaryPeriod", loadSummaryPeriod())
-        val autoRefreshMinutes = root.optInt("autoRefreshMinutes", loadAutoRefreshMinutes())
-        val savedCategories = root.optJSONArray("categories")
-
-        val categories = loadCategories()
-        if (savedCategories != null) {
+        supplemental?.optJSONArray("categories")?.let { savedCategories ->
             for (index in 0 until savedCategories.length()) {
-                val value = savedCategories.optString(index, "").trim()
+                val value = savedCategories.getString(index).trim()
                 if (value.isNotBlank() && categories.none { it.equals(value, ignoreCase = true) }) {
                     categories.add(value)
                 }
             }
         }
 
-        getSharedPreferences(prefsName, MODE_PRIVATE)
-            .edit()
+        val sharedTolerance = portfolio.optDouble(
+            "rebalance_tolerance_percent",
+            loadTolerance()
+        )
+
+        return SharedImportPlan(
+            assets = importedByKey.values.toList(),
+            categories = categories,
+            tolerance = sharedTolerance
+        )
+    }
+
+    private fun snapshotsWithCurrentTotal(source: JSONArray, assets: List<Asset>): JSONArray {
+        val result = JSONArray()
+        for (index in 0 until source.length()) {
+            result.put(source.get(index))
+        }
+        result.put(
+            JSONObject().apply {
+                put("totalValue", assets.sumOf { it.value })
+                put("timestamp", System.currentTimeMillis())
+            }
+        )
+        return result
+    }
+
+    private fun applySharedBackup(
+        validated: PortfolioSafety.ValidatedBackup,
+        mergeLocalHistory: Boolean = false
+    ) {
+        val portfolio = validated.sharedPortfolio
+            ?: throw IllegalArgumentException("Shared portfolio payload is missing.")
+        PortfolioSafety.ensureSafeReplacement(loadAssets().size, validated.incomingAssetCount)
+
+        val supplemental = validated.androidPayload
+        val plan = buildSharedImportPlan(portfolio, supplemental)
+        val prefs = getSharedPreferences(prefsName, MODE_PRIVATE)
+        val localTransactions = JSONArray(prefs.getString(transactionsKey, "[]") ?: "[]")
+        val remoteTransactions = supplemental?.optJSONArray("transactions") ?: JSONArray()
+        val transactions = if (mergeLocalHistory) {
+            PortfolioSafety.mergeHistory(localTransactions, remoteTransactions, "id")
+        } else {
+            supplemental?.optJSONArray("transactions") ?: localTransactions
+        }
+        val localSnapshots = JSONArray(prefs.getString(snapshotsKey, "[]") ?: "[]")
+        val remoteSnapshots = supplemental?.optJSONArray("snapshots") ?: JSONArray()
+        val sourceSnapshots = if (mergeLocalHistory) {
+            PortfolioSafety.mergeHistory(localSnapshots, remoteSnapshots, "timestamp")
+        } else {
+            supplemental?.optJSONArray("snapshots") ?: localSnapshots
+        }
+        val displayUnit = supplemental?.optString("displayUnit", loadDisplayUnit())
+            ?: loadDisplayUnit()
+        val summaryPeriod = supplemental?.optString("summaryPeriod", loadSummaryPeriod())
+            ?: loadSummaryPeriod()
+        val autoRefreshMinutes = supplemental?.optInt(
+            "autoRefreshMinutes",
+            loadAutoRefreshMinutes()
+        ) ?: loadAutoRefreshMinutes()
+
+        preservePreRestoreState()
+        pushUndoCheckpoint()
+        val committed = prefs.edit()
+            .putString(assetsKey, assetsToJsonArray(plan.assets).toString())
             .putString(transactionsKey, transactions.toString())
-            .putString(snapshotsKey, snapshots.toString())
+            .putString(snapshotsKey, snapshotsWithCurrentTotal(sourceSnapshots, plan.assets).toString())
+            .putString(toleranceKey, plan.tolerance.toString())
             .putString(displayUnitKey, displayUnit)
             .putString(summaryPeriodKey, summaryPeriod)
             .putInt(autoRefreshMinutesKey, autoRefreshMinutes)
-            .putString(categoriesKey, JSONArray(categories).toString())
-            .apply()
+            .putString(categoriesKey, JSONArray(plan.categories).toString())
+            .commit()
+
+        check(committed) { "Android could not save the restored portfolio. Local data was not changed." }
 
         scheduleAutoRefresh()
     }
 
-    private fun restoreAndroidBackupPayload(root: JSONObject) {
+    private fun applyLegacyAndroidBackup(validated: PortfolioSafety.ValidatedBackup) {
+        val root = validated.root
+        PortfolioSafety.ensureSafeReplacement(loadAssets().size, validated.incomingAssetCount)
         val assets = root.getJSONArray("assets")
         val transactions = root.optJSONArray("transactions") ?: JSONArray()
         val snapshots = root.optJSONArray("snapshots") ?: JSONArray()
@@ -4472,10 +5059,9 @@ class MainActivity : Activity() {
         val autoRefreshMinutes = root.optInt("autoRefreshMinutes", 0)
         val categories = root.optJSONArray("categories") ?: JSONArray(coreCategories)
 
+        preservePreRestoreState()
         pushUndoCheckpoint()
-
-        getSharedPreferences(prefsName, MODE_PRIVATE)
-            .edit()
+        val committed = getSharedPreferences(prefsName, MODE_PRIVATE).edit()
             .putString(assetsKey, assets.toString())
             .putString(transactionsKey, transactions.toString())
             .putString(snapshotsKey, snapshots.toString())
@@ -4484,7 +5070,9 @@ class MainActivity : Activity() {
             .putString(summaryPeriodKey, summaryPeriod)
             .putInt(autoRefreshMinutesKey, autoRefreshMinutes)
             .putString(categoriesKey, categories.toString())
-            .apply()
+            .commit()
+
+        check(committed) { "Android could not save the restored portfolio. Local data was not changed." }
 
         scheduleAutoRefresh()
     }
@@ -4499,26 +5087,12 @@ class MainActivity : Activity() {
         }.toString(2)
     }
 
-    private fun restoreBackupJson(raw: String) {
-        val root = JSONObject(raw)
-
-        if (root.optString("format") == "investment.shared.portfolio") {
-            require(root.optInt("schemaVersion", -1) == 1) {
-                "Unsupported shared portfolio schema. Local data was not changed."
-            }
-            val sharedPortfolio = root.optJSONObject("sharedPortfolio")
-                ?: throw IllegalArgumentException("Shared portfolio payload is missing.")
-
-            // Shared holdings are authoritative for cross-platform sync. Android-only
-            // history/settings are restored separately so a newer Windows portfolio
-            // cannot be overwritten by a stale androidBackup section.
-            importSharedPortfolio(sharedPortfolio)
-            root.optJSONObject("androidBackup")?.let { restoreAndroidSupplementalPayload(it) }
-            return
+    private fun restoreBackupJson(raw: String, mergeLocalHistory: Boolean = false) {
+        val validated = PortfolioSafety.validateBackup(raw)
+        when (validated.kind) {
+            PortfolioSafety.BackupKind.SHARED -> applySharedBackup(validated, mergeLocalHistory)
+            PortfolioSafety.BackupKind.LEGACY_ANDROID -> applyLegacyAndroidBackup(validated)
         }
-
-        // Backward compatibility with Android backup v1-v3.
-        restoreAndroidBackupPayload(root)
     }
 
     @Deprecated("Deprecated in Java")
@@ -4532,7 +5106,7 @@ class MainActivity : Activity() {
             ) {
                 Toast.makeText(
                     this,
-                    "No cloud file selected. Cloud remains disconnected.",
+                    ui("No cloud file selected. Cloud remains disconnected."),
                     Toast.LENGTH_LONG
                 ).show()
             }
@@ -4544,7 +5118,7 @@ class MainActivity : Activity() {
                 requestCode == createCloudBackupRequestCode ||
                 requestCode == connectCloudBackupRequestCode
             ) {
-                Toast.makeText(this, "No file was returned by Android.", Toast.LENGTH_LONG).show()
+                Toast.makeText(this, ui("No file was returned by Android."), Toast.LENGTH_LONG).show()
             }
             return
         }
@@ -4552,74 +5126,124 @@ class MainActivity : Activity() {
         try {
             when (requestCode) {
                 exportBackupRequestCode -> {
-                    contentResolver.openOutputStream(uri)?.bufferedWriter()?.use { writer ->
-                        writer.write(createBackupJson())
-                    }
-                    Toast.makeText(this, "Backup exported.", Toast.LENGTH_SHORT).show()
+                    runStorageOperation(
+                        label = "Exporting backup",
+                        task = {
+                            writeUriText(uri, createBackupJson())
+                            Unit
+                        },
+                        onSuccess = {
+                            Toast.makeText(this, ui("Backup exported safely."), Toast.LENGTH_SHORT).show()
+                        },
+                        onFailure = { error -> showBackupFileError(error) }
+                    )
                 }
 
                 importBackupRequestCode -> {
-                    val raw = contentResolver.openInputStream(uri)?.bufferedReader()?.use { it.readText() }
-                        ?: throw IllegalArgumentException("Could not read backup file.")
-                    restoreBackupJson(raw)
-                    Toast.makeText(this, "Backup restored.", Toast.LENGTH_SHORT).show()
-                    showPortfolioScreen()
+                    val expectedLocalFingerprint = sharedFingerprint(buildSharedPortfolio())
+                    runStorageOperation(
+                        label = "Validating backup",
+                        task = {
+                            val raw = readUriText(uri)
+                            PortfolioSafety.validateBackup(raw)
+                            raw
+                        },
+                        onSuccess = { raw ->
+                            try {
+                                check(sharedFingerprint(buildSharedPortfolio()) == expectedLocalFingerprint) {
+                                    "Phone data changed while the file was being read. Nothing was overwritten."
+                                }
+                                restoreBackupJson(raw)
+                                Toast.makeText(this, ui("Backup restored safely."), Toast.LENGTH_SHORT).show()
+                                showPortfolioScreen()
+                            } catch (error: Exception) {
+                                showBackupFileError(error)
+                            }
+                        },
+                        onFailure = { error -> showBackupFileError(error) }
+                    )
                 }
 
                 createCloudBackupRequestCode -> {
                     takePersistentCloudPermission(uri, data)
-                    saveCloudBackupUri(uri)
-                    val stream = contentResolver.openOutputStream(uri, "wt")
-                        ?: throw IllegalStateException("Could not create cloud backup file.")
-                    val document = mergedBackupDocument(null)
-                    stream.bufferedWriter().use { writer ->
-                        writer.write(document.toString(2))
-                    }
-                    saveCloudBaseline(document.getJSONObject("sharedPortfolio"))
-                    markCloudSync()
-                    Toast.makeText(this, "Cloud backup connected and saved.", Toast.LENGTH_SHORT).show()
-                    scheduleSmartCloudSync()
-                    if (onPortfolioScreen) {
-                        showPortfolioScreen()
-                    }
+                    runStorageOperation(
+                        label = "Creating cloud backup",
+                        task = {
+                            val document = mergedBackupDocument(null)
+                            PortfolioSafety.writeAndVerifyBackup(
+                                document.toString(2),
+                                write = { writeUriText(uri, it) },
+                                read = { readUriText(uri) }
+                            )
+                            document
+                        },
+                        onSuccess = { document ->
+                            saveCloudBackupUri(uri)
+                            saveCloudBaseline(document.getJSONObject("sharedPortfolio"))
+                            markCloudSync()
+                            Toast.makeText(this, ui("Cloud backup connected and saved."), Toast.LENGTH_SHORT).show()
+                            scheduleSmartCloudSync()
+                            if (onPortfolioScreen) showPortfolioScreen()
+                        },
+                        onFailure = { error ->
+                            showCloudAccessError(
+                                "Cloud Setup Failed",
+                                error.message ?: "Could not create the cloud backup file."
+                            )
+                        }
+                    )
                 }
 
                 connectCloudBackupRequestCode -> {
                     takePersistentCloudPermission(uri, data)
-                    val raw = contentResolver.openInputStream(uri)?.bufferedReader()?.use { it.readText() }
-                        ?: throw IllegalArgumentException("Could not read selected backup file.")
-
-                    val selected = JSONObject(raw)
-                    val valid = if (selected.optString("format") == "investment.shared.portfolio") {
-                        selected.optJSONObject("sharedPortfolio")
-                            ?.optJSONArray("assets") != null
-                    } else {
-                        selected.optJSONArray("assets") != null
-                    }
-                    if (!valid) {
-                        throw IllegalArgumentException("Selected file is not a compatible Investment backup.")
-                    }
-                    saveCloudBackupUri(uri)
-
-                    AlertDialog.Builder(this)
-                        .setTitle("Cloud Backup Connected")
-                        .setMessage("The file is connected. Load its data now or keep this phone's data?")
-                        .setNegativeButton("Keep Phone Data") { _, _ ->
-                            syncToCloud(forcePhoneData = true)
+                    runStorageOperation(
+                        label = "Validating cloud backup",
+                        task = {
+                            val raw = readUriText(uri)
+                            val selected = PortfolioSafety.validateBackup(raw)
+                            require(selected.kind == PortfolioSafety.BackupKind.SHARED) {
+                                "Cloud sync requires an investment.shared.portfolio file."
+                            }
+                            raw
+                        },
+                        onSuccess = {
+                            saveCloudBackupUri(uri)
+                            AlertDialog.Builder(this)
+                                .setTitle(ui("Cloud Backup Connected"))
+                                .setMessage(
+                                    ui("The file is valid and connected. Load its data now or keep this phone's data? ") +
+                                        ui("Nothing will be overwritten until you choose.")
+                                )
+                                .setNegativeButton(ui("Keep Phone Data")) { _, _ ->
+                                    syncToCloud(forcePhoneData = true)
+                                }
+                                .setPositiveButton(ui("Load Cloud Data")) { _, _ -> loadFromCloud() }
+                                .show()
+                        },
+                        onFailure = { error ->
+                            showCloudAccessError(
+                                "Cloud Connection Failed",
+                                error.message ?: "Could not validate the selected cloud file."
+                            )
                         }
-                        .setPositiveButton("Load Cloud Data") { _, _ ->
-                            loadFromCloud()
-                        }
-                        .show()
+                    )
                 }
             }
         } catch (error: Exception) {
             AlertDialog.Builder(this)
-                .setTitle("Backup Error")
-                .setMessage(error.message ?: "Could not process the backup file.")
-                .setPositiveButton("OK", null)
+                .setTitle(ui("Backup Error"))
+                .setMessage(ui(error.message ?: "Could not process the backup file."))
+                .setPositiveButton(ui("OK"), null)
                 .show()
         }
+    }
+
+    private fun showBackupFileError(error: Exception) {
+        AlertDialog.Builder(this)
+            .setTitle(ui("Backup Error"))
+            .setMessage(ui(error.message ?: "Could not process the backup file. Local data was not changed."))
+            .setPositiveButton(ui("OK"), null)
+            .show()
     }
 
     private fun addRecentActivity(parent: LinearLayout) {
@@ -4627,7 +5251,7 @@ class MainActivity : Activity() {
 
         parent.addView(
             TextView(this).apply {
-                text = "Recent Activity"
+                text = ui("Recent Activity")
                 textSize = 21f
                 setTypeface(typeface, Typeface.BOLD)
                 setTextColor(Color.rgb(35, 35, 35))
@@ -4638,7 +5262,7 @@ class MainActivity : Activity() {
         if (transactions.isEmpty()) {
             parent.addView(
                 TextView(this).apply {
-                    text = "No buy or sell transactions yet."
+                    text = ui("No buy or sell transactions yet.")
                     textSize = 14f
                     setTextColor(Color.GRAY)
                     setPadding(0, 0, 0, dp(12))
@@ -4674,10 +5298,10 @@ class MainActivity : Activity() {
 
     private fun confirmDeleteAsset(index: Int, asset: Asset) {
         AlertDialog.Builder(this)
-            .setTitle("Delete " + asset.name + "?")
-            .setMessage("This removes the asset from this test portfolio.")
-            .setNegativeButton("Cancel", null)
-            .setPositiveButton("Delete") { _, _ ->
+            .setTitle(ui("Delete ") + asset.name + "?")
+            .setMessage(ui("This removes the asset from your portfolio. You can undo it afterward."))
+            .setNegativeButton(ui("Cancel"), null)
+            .setPositiveButton(ui("Delete")) { _, _ ->
                 val assets = loadAssets()
                 if (index in assets.indices) {
                     pushUndoCheckpoint()
