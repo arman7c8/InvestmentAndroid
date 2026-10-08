@@ -11,6 +11,7 @@ import android.os.Handler
 import android.os.Looper
 import android.text.InputType
 import android.view.Gravity
+import android.view.View
 import android.view.ViewGroup
 import android.widget.ArrayAdapter
 import android.widget.Button
@@ -31,6 +32,8 @@ import java.security.MessageDigest
 import java.util.Date
 import java.util.Locale
 import java.util.UUID
+import java.util.concurrent.Executors
+import java.util.concurrent.atomic.AtomicBoolean
 
 class MainActivity : Activity() {
 
@@ -82,6 +85,7 @@ class MainActivity : Activity() {
 
     private val prefsName = "investment_android_prefs"
     private val assetsKey = "assets_json"
+    private val lastValidAssetsKey = "last_valid_assets_json"
     private val transactionsKey = "transactions_json"
     private val snapshotsKey = "snapshots_json"
     private val toleranceKey = "rebalance_tolerance"
@@ -99,6 +103,7 @@ class MainActivity : Activity() {
     private val cloudAutoSyncKey = "cloud_auto_sync"
     private val cloudAutoSyncMinutesKey = "cloud_auto_sync_minutes"
     private val cloudLastAutoCheckKey = "cloud_last_auto_check"
+    private val preRestoreBackupKey = "pre_restore_backup_json"
     private val exportBackupRequestCode = 1001
     private val importBackupRequestCode = 1002
     private val createCloudBackupRequestCode = 1003
@@ -116,12 +121,16 @@ class MainActivity : Activity() {
     private var autoRefreshRunnable: Runnable? = null
     private val cloudSyncHandler = Handler(Looper.getMainLooper())
     private var cloudSyncRunnable: Runnable? = null
+    private val cloudExecutor = Executors.newSingleThreadExecutor()
+    private val cloudOperationInProgress = AtomicBoolean(false)
+    private val priceUpdateInProgress = AtomicBoolean(false)
 
     private fun dp(value: Int): Int =
         (value * resources.displayMetrics.density).toInt()
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        window.decorView.layoutDirection = View.LAYOUT_DIRECTION_LOCALE
         ensureSeedData()
 
         if (isAppLockEnabled()) {
@@ -144,13 +153,12 @@ class MainActivity : Activity() {
         super.onPause()
     }
 
-    private fun demoAssets(): List<Asset> =
-        listOf(
-            Asset("Cash", "Cash", 1.0, 250_000_000.0, 250_000_000.0, 20.0, true, "Manual", ""),
-            Asset("Gold", "Gold", 1.0, 375_000_000.0, 340_000_000.0, 30.0, true, "Manual", ""),
-            Asset("Stocks", "Stocks", 1.0, 250_000_000.0, 265_000_000.0, 20.0, true, "Manual", ""),
-            Asset("Crypto", "Crypto", 1.0, 375_000_000.0, 330_000_000.0, 30.0, true, "Manual", "")
-        )
+    override fun onDestroy() {
+        stopAutoRefresh()
+        stopSmartCloudSync()
+        cloudExecutor.shutdownNow()
+        super.onDestroy()
+    }
 
     private fun inferCategory(name: String): String {
         val lower = name.lowercase(Locale.US)
@@ -178,7 +186,7 @@ class MainActivity : Activity() {
     private fun ensureSeedData() {
         val prefs = getSharedPreferences(prefsName, MODE_PRIVATE)
         if (!prefs.contains(assetsKey)) {
-            saveAssets(demoAssets())
+            saveAssets(emptyList())
         }
         if (!prefs.contains(transactionsKey)) {
             saveTransactions(emptyList())
@@ -245,6 +253,9 @@ class MainActivity : Activity() {
             put("snapshots", JSONArray(prefs.getString(snapshotsKey, "[]") ?: "[]"))
             put("categories", JSONArray(prefs.getString(categoriesKey, "[]") ?: "[]"))
             put("tolerance", loadTolerance())
+            put("displayUnit", loadDisplayUnit())
+            put("summaryPeriod", loadSummaryPeriod())
+            put("autoRefreshMinutes", loadAutoRefreshMinutes())
         }
     }
 
@@ -291,7 +302,29 @@ class MainActivity : Activity() {
                 toleranceKey,
                 state.optDouble("tolerance", defaultTolerancePercent).toString()
             )
+            .putString(displayUnitKey, state.optString("displayUnit", loadDisplayUnit()))
+            .putString(summaryPeriodKey, state.optString("summaryPeriod", loadSummaryPeriod()))
+            .putInt(autoRefreshMinutesKey, state.optInt("autoRefreshMinutes", loadAutoRefreshMinutes()))
             .apply()
+    }
+
+    private fun preservePreRestoreState() {
+        val saved = getSharedPreferences(prefsName, MODE_PRIVATE)
+            .edit()
+            .putString(preRestoreBackupKey, capturePortfolioState().toString())
+            .commit()
+        check(saved) { "Could not preserve the current local portfolio before restore." }
+    }
+
+    private fun restorePreviousLocalState() {
+        val prefs = getSharedPreferences(prefsName, MODE_PRIVATE)
+        val raw = prefs.getString(preRestoreBackupKey, null)
+            ?: throw IllegalStateException("No previous local portfolio is available.")
+        val previous = JSONObject(raw)
+        val current = capturePortfolioState().toString()
+        restorePortfolioState(previous)
+        prefs.edit().putString(preRestoreBackupKey, current).apply()
+        scheduleAutoRefresh()
     }
 
     private fun undoLastChange() {
@@ -352,6 +385,7 @@ class MainActivity : Activity() {
 
                 when {
                     item.has("quantity") && item.has("price") -> {
+                        val quantity = item.optDouble("quantity", Double.NaN)
                         val price = item.optDouble("price", 0.0)
                         val averageCost = if (item.has("averageCost")) {
                             item.optDouble("averageCost", price)
@@ -388,11 +422,18 @@ class MainActivity : Activity() {
                             ""
                         }
 
+                        require(
+                            quantity.isFinite() && quantity >= 0.0 &&
+                                price.isFinite() && price >= 0.0 &&
+                                averageCost.isFinite() && averageCost >= 0.0 &&
+                                targetPercent.isFinite() && targetPercent in 0.0..100.0
+                        ) { "Stored asset contains invalid numeric data." }
+
                         assets.add(
                             Asset(
                                 name = name,
                                 category = category,
-                                quantity = item.optDouble("quantity", 1.0),
+                                quantity = quantity,
                                 price = price,
                                 averageCost = averageCost,
                                 targetPercent = targetPercent,
@@ -412,6 +453,9 @@ class MainActivity : Activity() {
 
                     else -> {
                         val legacyAmount = item.optDouble("amount", 0.0)
+                        require(legacyAmount.isFinite() && legacyAmount >= 0.0) {
+                            "Stored legacy asset contains invalid numeric data."
+                        }
                         assets.add(
                             Asset(
                                 name = name,
@@ -430,6 +474,15 @@ class MainActivity : Activity() {
                 }
             }
         } catch (_: Exception) {
+            val recovered = getSharedPreferences(prefsName, MODE_PRIVATE)
+                .getString(lastValidAssetsKey, null)
+            if (!recovered.isNullOrBlank() && recovered != raw && isValidLocalAssetsJson(recovered)) {
+                val restored = getSharedPreferences(prefsName, MODE_PRIVATE)
+                    .edit()
+                    .putString(assetsKey, recovered)
+                    .commit()
+                if (restored) return loadAssets()
+            }
             return mutableListOf()
         }
 
@@ -440,7 +493,7 @@ class MainActivity : Activity() {
         return assets
     }
 
-    private fun saveAssets(assets: List<Asset>) {
+    private fun assetsToJsonArray(assets: List<Asset>): JSONArray {
         val array = JSONArray()
         assets.forEach { asset ->
             array.put(
@@ -467,10 +520,42 @@ class MainActivity : Activity() {
             )
         }
 
-        getSharedPreferences(prefsName, MODE_PRIVATE)
-            .edit()
-            .putString(assetsKey, array.toString())
-            .apply()
+        return array
+    }
+
+    private fun isValidLocalAssetsJson(raw: String): Boolean {
+        return try {
+            val array = JSONArray(raw)
+            for (index in 0 until array.length()) {
+                val item = array.optJSONObject(index) ?: return false
+                if (item.optString("name", "").isBlank()) return false
+                val hasModernNumbers = item.has("quantity") && item.has("price")
+                val hasLegacyAmount = item.has("amount")
+                if (!hasModernNumbers && !hasLegacyAmount) return false
+                val values = if (hasModernNumbers) {
+                    listOf(item.opt("quantity"), item.opt("price"))
+                } else {
+                    listOf(item.opt("amount"))
+                }
+                if (values.any { it !is Number || !it.toDouble().isFinite() || it.toDouble() < 0.0 }) {
+                    return false
+                }
+            }
+            true
+        } catch (_: Exception) {
+            false
+        }
+    }
+
+    private fun saveAssets(assets: List<Asset>) {
+        val prefs = getSharedPreferences(prefsName, MODE_PRIVATE)
+        val next = assetsToJsonArray(assets).toString()
+        val editor = prefs.edit().putString(assetsKey, next)
+        val current = prefs.getString(assetsKey, null)
+        if (!current.isNullOrBlank() && current != next && isValidLocalAssetsJson(current)) {
+            editor.putString(lastValidAssetsKey, current)
+        }
+        editor.apply()
     }
 
     private fun assetToJson(asset: Asset): String {
@@ -736,7 +821,9 @@ class MainActivity : Activity() {
     private fun loadTolerance(): Double {
         val raw = getSharedPreferences(prefsName, MODE_PRIVATE)
             .getString(toleranceKey, null)
-        return raw?.toDoubleOrNull() ?: defaultTolerancePercent
+        return raw?.toDoubleOrNull()
+            ?.takeIf { it.isFinite() && it in 0.0..20.0 }
+            ?: defaultTolerancePercent
     }
 
     private fun saveTolerance(value: Double) {
@@ -1105,7 +1192,7 @@ class MainActivity : Activity() {
         }
 
         val subtitle = TextView(this).apply {
-            text = "Your portfolio, one step closer to mobile.\nv0.30.0"
+            text = "Your portfolio, one step closer to mobile.\nv${BuildConfig.VERSION_NAME}"
             textSize = 17f
             gravity = Gravity.CENTER
             setTextColor(Color.DKGRAY)
@@ -1289,16 +1376,16 @@ class MainActivity : Activity() {
         }
 
         val resetButton = Button(this).apply {
-            text = "Reset Demo Data"
+            text = "Reset Portfolio"
             isAllCaps = false
             setOnClickListener {
                 AlertDialog.Builder(this@MainActivity)
-                    .setTitle("Reset demo data?")
-                    .setMessage("This will replace assets and clear transaction history.")
+                    .setTitle("Reset portfolio?")
+                    .setMessage("This will delete all assets and transaction history. You can undo it afterward.")
                     .setNegativeButton("Cancel", null)
                     .setPositiveButton("Reset") { _, _ ->
                         pushUndoCheckpoint()
-                        saveAssets(demoAssets())
+                        saveAssets(emptyList())
                         saveTransactions(emptyList())
                         saveSnapshots(emptyList())
                         showPortfolioScreen()
@@ -1386,7 +1473,7 @@ class MainActivity : Activity() {
         container.addView(backButton, buttonParams)
         container.addView(
             TextView(this).apply {
-                text = "Investment Android • v0.30.0"
+                text = "Investment Android • v${BuildConfig.VERSION_NAME}"
                 textSize = 12f
                 gravity = Gravity.CENTER
                 setTextColor(Color.GRAY)
@@ -1798,7 +1885,7 @@ class MainActivity : Activity() {
             "App Lock",
             "Settings",
             "Backup / Restore",
-            "Reset Demo Data"
+            "Reset Portfolio"
         )
 
         AlertDialog.Builder(this)
@@ -1823,12 +1910,12 @@ class MainActivity : Activity() {
 
     private fun showResetDemoDialog() {
         AlertDialog.Builder(this)
-            .setTitle("Reset demo data?")
-            .setMessage("This will replace assets and clear transaction history.")
+            .setTitle("Reset portfolio?")
+            .setMessage("This will delete all assets and transaction history. You can undo it afterward.")
             .setNegativeButton("Cancel", null)
             .setPositiveButton("Reset") { _, _ ->
                 pushUndoCheckpoint()
-                saveAssets(demoAssets())
+                saveAssets(emptyList())
                 saveTransactions(emptyList())
                 saveSnapshots(emptyList())
                 showPortfolioScreen()
@@ -2208,7 +2295,7 @@ class MainActivity : Activity() {
 
                 inputs.forEach { (index, input) ->
                     val value = input.text.toString().trim().replace(",", "").toDoubleOrNull()
-                    if (value == null || value < 0.0 || value > 100.0) {
+                    if (value == null || !value.isFinite() || value < 0.0 || value > 100.0) {
                         input.error = "Enter 0 to 100"
                         invalid = true
                     } else {
@@ -2267,7 +2354,7 @@ class MainActivity : Activity() {
             dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
                 val value = input.text.toString().trim().replace(",", "").toDoubleOrNull()
 
-                if (value == null || value < 0.0 || value > 20.0) {
+                if (value == null || !value.isFinite() || value < 0.0 || value > 20.0) {
                     input.error = "Enter a value from 0 to 20"
                     return@setOnClickListener
                 }
@@ -2476,13 +2563,13 @@ class MainActivity : Activity() {
 
                 when {
                     name.isEmpty() -> nameInput.error = "Enter an asset name"
-                    quantity == null || quantity <= 0.0 ->
+                    quantity == null || !quantity.isFinite() || quantity <= 0.0 ->
                         quantityInput.error = "Enter a quantity greater than zero"
-                    price == null || price < 0.0 ->
+                    price == null || !price.isFinite() || price < 0.0 ->
                         priceInput.error = "Enter a valid current price"
-                    averageCost == null || averageCost < 0.0 ->
+                    averageCost == null || !averageCost.isFinite() || averageCost < 0.0 ->
                         averageCostInput.error = "Enter a valid average cost"
-                    targetPercent == null || targetPercent < 0.0 || targetPercent > 100.0 ->
+                    targetPercent == null || !targetPercent.isFinite() || targetPercent < 0.0 || targetPercent > 100.0 ->
                         targetInput.error = "Target must be between 0 and 100"
                     priceSource == "Nobitex" && symbol.isBlank() ->
                         symbolInput.error = "Enter a Nobitex market symbol"
@@ -2788,9 +2875,9 @@ class MainActivity : Activity() {
                 val transactionPrice = priceInput.text.toString().trim().replace(",", "").toDoubleOrNull()
 
                 when {
-                    quantity == null || quantity <= 0.0 ->
+                    quantity == null || !quantity.isFinite() || quantity <= 0.0 ->
                         quantityInput.error = "Enter a quantity greater than zero"
-                    transactionPrice == null || transactionPrice < 0.0 ->
+                    transactionPrice == null || !transactionPrice.isFinite() || transactionPrice < 0.0 ->
                         priceInput.error = "Enter a valid transaction price"
                     !isBuy && quantity > asset.quantity ->
                         quantityInput.error = "You only own " + formatQuantity(asset.quantity)
@@ -2966,7 +3053,7 @@ class MainActivity : Activity() {
 
                 inputs.forEach { (index, input) ->
                     val value = input.text.toString().trim().replace(",", "").toDoubleOrNull()
-                    if (value == null || value < 0.0) {
+                    if (value == null || !value.isFinite() || value < 0.0) {
                         input.error = "Enter a valid price"
                         invalid = true
                     } else if (index in updatedAssets.indices) {
@@ -3031,7 +3118,7 @@ class MainActivity : Activity() {
             connection.connectTimeout = 12_000
             connection.readTimeout = 12_000
             connection.setRequestProperty("Accept", "application/json")
-            connection.setRequestProperty("User-Agent", "InvestmentAndroid/0.9")
+            connection.setRequestProperty("User-Agent", "InvestmentAndroid/${BuildConfig.VERSION_NAME}")
             val code = connection.responseCode
             if (code !in 200..299) {
                 throw IllegalStateException("HTTP " + code)
@@ -3061,6 +3148,17 @@ class MainActivity : Activity() {
             return
         }
 
+        if (cloudOperationInProgress.get() || !priceUpdateInProgress.compareAndSet(false, true)) {
+            if (showResult) {
+                Toast.makeText(
+                    this,
+                    "A price, backup, or cloud operation is already running.",
+                    Toast.LENGTH_SHORT
+                ).show()
+            }
+            return
+        }
+
         if (showResult) {
             Toast.makeText(this, "Updating Nobitex prices...", Toast.LENGTH_SHORT).show()
         }
@@ -3085,6 +3183,10 @@ class MainActivity : Activity() {
                     .getJSONObject("usdt-rls")
                     .getString("latest")
                     .toDouble()
+
+                if (!usdtRls.isFinite() || usdtRls <= 0.0) {
+                    throw IllegalStateException("Nobitex returned an invalid USDT price.")
+                }
 
                 val usdtToman = usdtRls / 10.0
 
@@ -3125,7 +3227,7 @@ class MainActivity : Activity() {
                             usdtPrice * usdtToman
                         }
 
-                        if (index in updatedAssets.indices && priceToman >= 0.0) {
+                        if (index in updatedAssets.indices && priceToman.isFinite() && priceToman > 0.0) {
                             updatedAssets[index] = updatedAssets[index].copy(price = priceToman)
                             updatedNames.add(asset.name)
                         } else {
@@ -3145,6 +3247,8 @@ class MainActivity : Activity() {
                 markPriceUpdate()
 
                 runOnUiThread {
+                    priceUpdateInProgress.set(false)
+                    if (isFinishing || isDestroyed) return@runOnUiThread
                     if (showResult) {
                         val message = buildString {
                             append("Updated: ")
@@ -3167,8 +3271,10 @@ class MainActivity : Activity() {
                     }
                 }
             } catch (error: Exception) {
-                if (showResult) {
-                    runOnUiThread {
+                runOnUiThread {
+                    priceUpdateInProgress.set(false)
+                    if (isFinishing || isDestroyed) return@runOnUiThread
+                    if (showResult) {
                         AlertDialog.Builder(this)
                             .setTitle("Nobitex Update Failed")
                             .setMessage(error.message ?: "Could not update market prices.")
@@ -3199,7 +3305,7 @@ class MainActivity : Activity() {
         dialog.setOnShowListener {
             dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
                 val finalBalance = input.text.toString().trim().replace(",", "").toDoubleOrNull()
-                if (finalBalance == null || finalBalance < 0.0) {
+                if (finalBalance == null || !finalBalance.isFinite() || finalBalance < 0.0) {
                     input.error = "Enter a valid balance"
                     return@setOnClickListener
                 }
@@ -3766,6 +3872,7 @@ class MainActivity : Activity() {
 
         for (index in 0 until assets.length()) {
             val item = assets.optJSONObject(index) ?: continue
+            val source = item.optJSONObject("source")
             normalized.add(
                 listOf(
                     item.optString("id", ""),
@@ -3777,7 +3884,13 @@ class MainActivity : Activity() {
                     item.optDouble("target_percent", 0.0).toString(),
                     item.optBoolean("include_in_target", false).toString(),
                     item.optString("price_source", ""),
-                    item.optString("symbol", "")
+                    item.optString("symbol", ""),
+                    item.optString("source_platform", ""),
+                    source?.optString("kind", "") ?: "",
+                    source?.optString("group_id", "") ?: "",
+                    source?.optString("asset_id", "") ?: "",
+                    source?.optString("bank_id", "") ?: "",
+                    source?.optString("group_kind", "") ?: ""
                 ).joinToString("|")
             )
         }
@@ -3809,26 +3922,50 @@ class MainActivity : Activity() {
     }
 
     private fun mergedBackupDocument(existingRaw: String?): JSONObject {
-        val root = try {
-            if (existingRaw.isNullOrBlank()) JSONObject() else JSONObject(existingRaw)
-        } catch (_: Exception) {
+        val root = if (existingRaw.isNullOrBlank()) {
             JSONObject()
+        } else {
+            PortfolioSafety.validateBackup(existingRaw).also {
+                require(it.kind == PortfolioSafety.BackupKind.SHARED) {
+                    "Cloud file is not a shared portfolio. No data was overwritten."
+                }
+            }.root
         }
 
-        if (root.optString("format") != "investment.shared.portfolio") {
-            val clean = JSONObject()
-            clean.put("format", "investment.shared.portfolio")
-            clean.put("schemaVersion", 1)
-            clean.put("updatedAt", System.currentTimeMillis())
-            clean.put("sharedPortfolio", buildSharedPortfolio())
-            clean.put("androidBackup", buildAndroidBackupPayload())
-            return clean
+        val localPortfolio = buildSharedPortfolio()
+        val previousPortfolio = root.optJSONObject("sharedPortfolio")
+        val previousAssets = previousPortfolio?.optJSONArray("assets")
+        val previousById = mutableMapOf<String, JSONObject>()
+        if (previousAssets != null) {
+            for (index in 0 until previousAssets.length()) {
+                val item = previousAssets.optJSONObject(index) ?: continue
+                previousById[sharedAssetKey(item)] = item
+            }
         }
+        val localAssets = localPortfolio.getJSONArray("assets")
+        val mergedAssets = JSONArray()
+        for (index in 0 until localAssets.length()) {
+            val localAsset = localAssets.getJSONObject(index)
+            val preserved = previousById[sharedAssetKey(localAsset)]
+            val merged = if (preserved == null) JSONObject() else JSONObject(preserved.toString())
+            for (key in localAsset.keys()) {
+                merged.put(key, localAsset.get(key))
+            }
+            mergedAssets.put(merged)
+        }
+        val mergedPortfolio = if (previousPortfolio == null) {
+            JSONObject()
+        } else {
+            JSONObject(previousPortfolio.toString())
+        }
+        mergedPortfolio.put("currency", "Toman")
+        mergedPortfolio.put("assets", mergedAssets)
+        mergedPortfolio.put("rebalance_tolerance_percent", loadTolerance())
 
-        root.put("format", "investment.shared.portfolio")
-        root.put("schemaVersion", 1)
+        root.put("format", PortfolioSafety.SHARED_FORMAT)
+        root.put("schemaVersion", PortfolioSafety.SHARED_SCHEMA_VERSION)
         root.put("updatedAt", System.currentTimeMillis())
-        root.put("sharedPortfolio", buildSharedPortfolio())
+        root.put("sharedPortfolio", mergedPortfolio)
         root.put("androidBackup", buildAndroidBackupPayload())
         return root
     }
@@ -3850,6 +3987,7 @@ class MainActivity : Activity() {
             val assets = portfolio.optJSONArray("assets") ?: JSONArray()
             for (index in 0 until assets.length()) {
                 val item = assets.optJSONObject(index) ?: continue
+                val source = item.optJSONObject("source")
                 val normalized = listOf(
                     item.optString("name", ""),
                     item.optString("category", ""),
@@ -3859,7 +3997,13 @@ class MainActivity : Activity() {
                     item.optDouble("target_percent", 0.0).toString(),
                     item.optBoolean("include_in_target", false).toString(),
                     item.optString("price_source", ""),
-                    item.optString("symbol", "")
+                    item.optString("symbol", ""),
+                    item.optString("source_platform", ""),
+                    source?.optString("kind", "") ?: "",
+                    source?.optString("group_id", "") ?: "",
+                    source?.optString("asset_id", "") ?: "",
+                    source?.optString("bank_id", "") ?: "",
+                    source?.optString("group_kind", "") ?: ""
                 ).joinToString("|")
                 result[sharedAssetKey(item)] = normalized
             }
@@ -3894,6 +4038,83 @@ class MainActivity : Activity() {
         )
     }
 
+    private fun <T> runStorageOperation(
+        label: String,
+        showWorking: Boolean = true,
+        task: () -> T,
+        onSuccess: (T) -> Unit,
+        onFailure: (Exception) -> Unit
+    ) {
+        if (priceUpdateInProgress.get() || !cloudOperationInProgress.compareAndSet(false, true)) {
+            if (showWorking) {
+                Toast.makeText(this, "Another backup or sync operation is still running.", Toast.LENGTH_SHORT).show()
+            }
+            return
+        }
+
+        if (showWorking) {
+            Toast.makeText(this, "$label…", Toast.LENGTH_SHORT).show()
+        }
+
+        try {
+            cloudExecutor.execute {
+                try {
+                    val result = task()
+                    runOnUiThread {
+                        cloudOperationInProgress.set(false)
+                        if (!isFinishing && !isDestroyed) {
+                            onSuccess(result)
+                        }
+                    }
+                } catch (error: Exception) {
+                    runOnUiThread {
+                        cloudOperationInProgress.set(false)
+                        if (!isFinishing && !isDestroyed) {
+                            onFailure(error)
+                        }
+                    }
+                }
+            }
+        } catch (error: Exception) {
+            cloudOperationInProgress.set(false)
+            onFailure(error)
+        }
+    }
+
+    private fun readUriText(uri: android.net.Uri): String {
+        val stream = contentResolver.openInputStream(uri)
+            ?: throw IllegalStateException("Could not read the selected file.")
+        return stream.bufferedReader().use { reader ->
+            val buffer = CharArray(8192)
+            val result = StringBuilder()
+            while (true) {
+                val count = reader.read(buffer)
+                if (count < 0) break
+                require(result.length + count <= 20_000_000) {
+                    "Backup exceeds the 20 MB safety limit. Nothing was changed."
+                }
+                result.append(buffer, 0, count)
+            }
+            result.toString()
+        }
+    }
+
+    private fun writeUriText(uri: android.net.Uri, raw: String) {
+        val stream = contentResolver.openOutputStream(uri, "wt")
+            ?: throw IllegalStateException("Could not open the selected file for writing.")
+        stream.bufferedWriter().use { writer ->
+            writer.write(raw)
+            writer.flush()
+        }
+    }
+
+    private data class SmartSyncResult(
+        val raw: String,
+        val remote: JSONObject,
+        val local: JSONObject,
+        val decision: PortfolioSafety.SyncDecision
+    )
+
     private fun smartCloudSyncCheck() {
         if (!isCloudAutoSyncEnabled()) {
             return
@@ -3908,63 +4129,64 @@ class MainActivity : Activity() {
             return
         }
 
-        try {
-            val raw = contentResolver.openInputStream(uri)
-                ?.bufferedReader()
-                ?.use { it.readText() }
-                ?: return
-            val root = JSONObject(raw)
-            if (root.optString("format") != "investment.shared.portfolio" ||
-                root.optInt("schemaVersion", -1) != 1
-            ) {
-                return
+        runStorageOperation(
+            label = "Checking cloud",
+            showWorking = false,
+            task = {
+                val raw = readUriText(uri)
+                val validated = PortfolioSafety.validateBackup(raw)
+                require(validated.kind == PortfolioSafety.BackupKind.SHARED) {
+                    "Connected cloud file is not a shared portfolio."
+                }
+                val remote = validated.sharedPortfolio
+                    ?: throw IllegalArgumentException("Shared portfolio data is missing.")
+                val local = buildSharedPortfolio()
+                val baseline = prefs.getString(cloudSharedFingerprintKey, null)
+                SmartSyncResult(
+                    raw = raw,
+                    remote = remote,
+                    local = local,
+                    decision = PortfolioSafety.decideSync(
+                        sharedFingerprint(local),
+                        sharedFingerprint(remote),
+                        baseline
+                    )
+                )
+            },
+            onSuccess = { result ->
+                // A check is throttled only after a complete, valid provider read.
+                prefs.edit().putLong(cloudLastAutoCheckKey, now).apply()
+                when (result.decision) {
+                    PortfolioSafety.SyncDecision.MATCH -> {
+                        saveCloudBaseline(result.remote)
+                        markCloudSync()
+                    }
+                    PortfolioSafety.SyncDecision.LOAD_REMOTE -> {
+                        applyCloudRaw(result.raw, sharedFingerprint(result.local))
+                    }
+                    PortfolioSafety.SyncDecision.UPLOAD_LOCAL -> syncToCloud()
+                    PortfolioSafety.SyncDecision.FIRST_SYNC_CONFLICT,
+                    PortfolioSafety.SyncDecision.CONFLICT -> {
+                        val changedRows = sharedChangeCount(result.local, result.remote)
+                        AlertDialog.Builder(this)
+                            .setTitle("Cloud Sync Conflict")
+                            .setMessage(
+                                "Smart sync found changes on both Phone and Cloud. " +
+                                    changedRows + " asset row(s) differ. Nothing was overwritten."
+                            )
+                            .setNegativeButton("Later", null)
+                            .setNeutralButton("Use Cloud") { _, _ -> loadFromCloud() }
+                            .setPositiveButton("Use Phone") { _, _ ->
+                                syncToCloud(forcePhoneData = true)
+                            }
+                            .show()
+                    }
+                }
+            },
+            onFailure = {
+                // Smart sync remains best-effort and retries on the next scheduled check.
             }
-            val remote = root.optJSONObject("sharedPortfolio") ?: return
-            // Only record a completed auto-check after the cloud file was read and
-            // validated successfully. Transient provider failures can then retry on
-            // the next resume instead of being suppressed for the whole interval.
-            prefs.edit().putLong(cloudLastAutoCheckKey, now).apply()
-            val local = buildSharedPortfolio()
-            val baseline = prefs.getString(cloudSharedFingerprintKey, null) ?: return
-            val localFingerprint = sharedFingerprint(local)
-            val remoteFingerprint = sharedFingerprint(remote)
-
-            when {
-                localFingerprint == remoteFingerprint -> {
-                    // Both copies already agree. Refresh the baseline too; otherwise an
-                    // old baseline can make the next one-sided edit look like a conflict.
-                    saveCloudBaseline(remote)
-                    markCloudSync()
-                }
-                localFingerprint == baseline && remoteFingerprint != baseline -> {
-                    restoreBackupJson(raw)
-                    saveCloudBaseline(remote)
-                    markCloudSync()
-                    Toast.makeText(this, "Cloud changes loaded.", Toast.LENGTH_SHORT).show()
-                    showPortfolioScreen()
-                }
-                localFingerprint != baseline && remoteFingerprint == baseline -> {
-                    syncToCloud()
-                }
-                else -> {
-                    val changedRows = sharedChangeCount(local, remote)
-                    AlertDialog.Builder(this)
-                        .setTitle("Cloud Sync Conflict")
-                        .setMessage(
-                            "Smart sync found changes on both Phone and Cloud. " +
-                                changedRows + " asset row(s) differ. Nothing was overwritten."
-                        )
-                        .setNegativeButton("Later", null)
-                        .setNeutralButton("Use Cloud") { _, _ -> loadFromCloud() }
-                        .setPositiveButton("Use Phone") { _, _ ->
-                            syncToCloud(forcePhoneData = true)
-                        }
-                        .show()
-                }
-            }
-        } catch (_: Exception) {
-            // Resume sync is best-effort. Manual Cloud Status shows actionable errors.
-        }
+        )
     }
 
     private fun showCloudAccessError(title: String, message: String) {
@@ -3981,6 +4203,14 @@ class MainActivity : Activity() {
             .show()
     }
 
+    private data class CloudStatusResult(
+        val local: JSONObject,
+        val remote: JSONObject,
+        val baseline: String?,
+        val localFingerprint: String,
+        val remoteFingerprint: String
+    )
+
     private fun checkCloudStatus() {
         val uri = loadCloudBackupUri()
         if (uri == null) {
@@ -3988,64 +4218,87 @@ class MainActivity : Activity() {
             return
         }
 
-        try {
-            val raw = contentResolver.openInputStream(uri)
-                ?.bufferedReader()
-                ?.use { it.readText() }
-                ?: throw IllegalStateException("Could not read the connected cloud file.")
-            val root = JSONObject(raw)
-            if (root.optString("format") != "investment.shared.portfolio" ||
-                root.optInt("schemaVersion", -1) != 1
-            ) {
-                throw IllegalArgumentException("The connected file has an unsupported shared portfolio schema.")
-            }
-            val remote = root.optJSONObject("sharedPortfolio")
-                ?: throw IllegalArgumentException("Shared portfolio data is missing.")
-            val local = buildSharedPortfolio()
-            val prefs = getSharedPreferences(prefsName, MODE_PRIVATE)
-            val baseline = prefs.getString(cloudSharedFingerprintKey, null)
-            val localFingerprint = sharedFingerprint(local)
-            val remoteFingerprint = sharedFingerprint(remote)
-
-            if (localFingerprint == remoteFingerprint && baseline != localFingerprint) {
-                saveCloudBaseline(remote)
-                markCloudSync()
-            }
-
-            val state = when {
-                localFingerprint == remoteFingerprint -> "Phone and Cloud match."
-                baseline.isNullOrBlank() -> "First sync needs a choice."
-                localFingerprint != baseline && remoteFingerprint != baseline ->
-                    "Conflict: both Phone and Cloud changed."
-                remoteFingerprint != baseline -> "Cloud has newer/different portfolio data."
-                localFingerprint != baseline -> "Phone has changes waiting to upload."
-                else -> "Phone and Cloud differ."
-            }
-
-            val changed = if (localFingerprint == remoteFingerprint) {
-                0
-            } else {
-                sharedChangeCount(local, remote)
-            }
-
-            AlertDialog.Builder(this)
-                .setTitle("Cloud Status")
-                .setMessage(
-                    state +
-                        "\n\nPhone: " + sharedPortfolioSummary(local) +
-                        "\nCloud: " + sharedPortfolioSummary(remote) +
-                        "\nChanged asset rows: " + changed
+        runStorageOperation(
+            label = "Checking cloud status",
+            task = {
+                val validated = PortfolioSafety.validateBackup(readUriText(uri))
+                require(validated.kind == PortfolioSafety.BackupKind.SHARED) {
+                    "Connected file is not a shared portfolio."
+                }
+                val remote = validated.sharedPortfolio
+                    ?: throw IllegalArgumentException("Shared portfolio data is missing.")
+                val local = buildSharedPortfolio()
+                val baseline = getSharedPreferences(prefsName, MODE_PRIVATE)
+                    .getString(cloudSharedFingerprintKey, null)
+                CloudStatusResult(
+                    local = local,
+                    remote = remote,
+                    baseline = baseline,
+                    localFingerprint = sharedFingerprint(local),
+                    remoteFingerprint = sharedFingerprint(remote)
                 )
-                .setNegativeButton("Close", null)
-                .setPositiveButton("Sync Now") { _, _ -> syncToCloud() }
-                .show()
-        } catch (error: Exception) {
-            showCloudAccessError(
-                "Cloud Status Failed",
-                error.message ?: "Could not check the cloud file."
-            )
-        }
+            },
+            onSuccess = { result ->
+                if (
+                    result.localFingerprint == result.remoteFingerprint &&
+                    result.baseline != result.localFingerprint
+                ) {
+                    saveCloudBaseline(result.remote)
+                    markCloudSync()
+                }
+                val state = when (
+                    PortfolioSafety.decideSync(
+                        result.localFingerprint,
+                        result.remoteFingerprint,
+                        result.baseline
+                    )
+                ) {
+                    PortfolioSafety.SyncDecision.MATCH -> "Phone and Cloud match."
+                    PortfolioSafety.SyncDecision.FIRST_SYNC_CONFLICT -> "First sync needs a choice."
+                    PortfolioSafety.SyncDecision.LOAD_REMOTE -> "Cloud has newer/different portfolio data."
+                    PortfolioSafety.SyncDecision.UPLOAD_LOCAL -> "Phone has changes waiting to upload."
+                    PortfolioSafety.SyncDecision.CONFLICT -> "Conflict: both Phone and Cloud changed."
+                }
+                val changed = if (result.localFingerprint == result.remoteFingerprint) {
+                    0
+                } else {
+                    sharedChangeCount(result.local, result.remote)
+                }
+                AlertDialog.Builder(this)
+                    .setTitle("Cloud Status")
+                    .setMessage(
+                        state +
+                            "\n\nPhone: " + sharedPortfolioSummary(result.local) +
+                            "\nCloud: " + sharedPortfolioSummary(result.remote) +
+                            "\nChanged asset rows: " + changed
+                    )
+                    .setNegativeButton("Close", null)
+                    .setPositiveButton("Sync Now") { _, _ -> syncToCloud() }
+                    .show()
+            },
+            onFailure = { error ->
+                showCloudAccessError(
+                    "Cloud Status Failed",
+                    error.message ?: "Could not check the cloud file."
+                )
+            }
+        )
     }
+
+    private enum class CloudSyncAction {
+        MATCH,
+        UPLOADED,
+        LOAD_REMOTE,
+        CONFLICT
+    }
+
+    private data class CloudSyncResult(
+        val action: CloudSyncAction,
+        val raw: String? = null,
+        val local: JSONObject? = null,
+        val remote: JSONObject? = null,
+        val savedPortfolio: JSONObject? = null
+    )
 
     private fun syncToCloud(forcePhoneData: Boolean = false) {
         val uri = loadCloudBackupUri()
@@ -4054,111 +4307,118 @@ class MainActivity : Activity() {
             return
         }
 
-        try {
-            val existingRaw = contentResolver.openInputStream(uri)
-                ?.bufferedReader()
-                ?.use { it.readText() }
-
-            // Never interpret malformed or incompatible cloud data as an empty
-            // file: doing so could overwrite a valid desktop/phone backup.
-            val existingRoot = if (existingRaw.isNullOrBlank()) {
-                null
-            } else {
-                try {
-                    JSONObject(existingRaw)
-                } catch (_: Exception) {
-                    throw IllegalArgumentException(
-                        "Cloud file is not valid JSON. No data was overwritten."
+        runStorageOperation(
+            label = "Syncing safely",
+            task = {
+                val existingRaw = readUriText(uri)
+                val validated = if (existingRaw.isBlank()) {
+                    null
+                } else {
+                    PortfolioSafety.validateBackup(existingRaw).also {
+                        require(it.kind == PortfolioSafety.BackupKind.SHARED) {
+                            "Cloud file is not a shared portfolio. No data was overwritten."
+                        }
+                    }
+                }
+                val remoteShared = validated?.sharedPortfolio
+                val localShared = buildSharedPortfolio()
+                if (remoteShared != null) {
+                    PortfolioSafety.ensureSafeReplacement(
+                        remoteShared.getJSONArray("assets").length(),
+                        localShared.getJSONArray("assets").length()
                     )
                 }
-            }
-            if (existingRoot != null && (
-                    existingRoot.optString("format") != "investment.shared.portfolio" ||
-                        existingRoot.optJSONObject("sharedPortfolio") == null ||
-                        existingRoot.optInt("schemaVersion", -1) != 1
-                    )
-            ) {
-                throw IllegalArgumentException(
-                    "Cloud backup format is missing or unsupported. No data was overwritten."
+
+                if (!forcePhoneData && remoteShared != null) {
+                    val baseline = getSharedPreferences(prefsName, MODE_PRIVATE)
+                        .getString(cloudSharedFingerprintKey, null)
+                    when (
+                        PortfolioSafety.decideSync(
+                            sharedFingerprint(localShared),
+                            sharedFingerprint(remoteShared),
+                            baseline
+                        )
+                    ) {
+                        PortfolioSafety.SyncDecision.MATCH ->
+                            return@runStorageOperation CloudSyncResult(
+                                action = CloudSyncAction.MATCH,
+                                remote = remoteShared
+                            )
+                        PortfolioSafety.SyncDecision.LOAD_REMOTE ->
+                            return@runStorageOperation CloudSyncResult(
+                                action = CloudSyncAction.LOAD_REMOTE,
+                                raw = existingRaw,
+                                local = localShared,
+                                remote = remoteShared
+                            )
+                        PortfolioSafety.SyncDecision.FIRST_SYNC_CONFLICT,
+                        PortfolioSafety.SyncDecision.CONFLICT ->
+                            return@runStorageOperation CloudSyncResult(
+                                action = CloudSyncAction.CONFLICT,
+                                local = localShared,
+                                remote = remoteShared
+                            )
+                        PortfolioSafety.SyncDecision.UPLOAD_LOCAL -> Unit
+                    }
+                }
+
+                val document = mergedBackupDocument(existingRaw)
+                writeUriText(uri, document.toString(2))
+                CloudSyncResult(
+                    action = CloudSyncAction.UPLOADED,
+                    savedPortfolio = document.getJSONObject("sharedPortfolio")
+                )
+            },
+            onSuccess = { result ->
+                when (result.action) {
+                    CloudSyncAction.MATCH -> {
+                        result.remote?.let(::saveCloudBaseline)
+                        markCloudSync()
+                        Toast.makeText(this, "Phone and Cloud already match.", Toast.LENGTH_SHORT).show()
+                        if (onPortfolioScreen) showPortfolioScreen()
+                    }
+                    CloudSyncAction.UPLOADED -> {
+                        result.savedPortfolio?.let(::saveCloudBaseline)
+                        markCloudSync()
+                        Toast.makeText(this, "Cloud backup updated safely.", Toast.LENGTH_SHORT).show()
+                        if (onPortfolioScreen) showPortfolioScreen()
+                    }
+                    CloudSyncAction.LOAD_REMOTE -> {
+                        val expectedLocal = result.local?.let(::sharedFingerprint)
+                        applyCloudRaw(
+                            result.raw ?: throw IllegalStateException("Cloud data is missing."),
+                            expectedLocal
+                        )
+                    }
+                    CloudSyncAction.CONFLICT -> {
+                        val local = result.local
+                            ?: throw IllegalStateException("Phone comparison data is missing.")
+                        val remote = result.remote
+                            ?: throw IllegalStateException("Cloud comparison data is missing.")
+                        val changedRows = sharedChangeCount(local, remote)
+                        AlertDialog.Builder(this)
+                            .setTitle("Cloud Sync Conflict")
+                            .setMessage(
+                                "Both copies may contain changes. " + changedRows +
+                                    " asset row(s) differ. Nothing was overwritten. " +
+                                    "Choose which portfolio to keep."
+                            )
+                            .setNegativeButton("Cancel", null)
+                            .setNeutralButton("Use Cloud") { _, _ -> loadFromCloud() }
+                            .setPositiveButton("Use Phone") { _, _ ->
+                                syncToCloud(forcePhoneData = true)
+                            }
+                            .show()
+                    }
+                }
+            },
+            onFailure = { error ->
+                showCloudAccessError(
+                    "Cloud Sync Failed",
+                    error.message ?: "Could not write the backup file."
                 )
             }
-
-            val remoteShared = existingRoot?.optJSONObject("sharedPortfolio")
-
-            val localShared = buildSharedPortfolio()
-            val prefs = getSharedPreferences(prefsName, MODE_PRIVATE)
-            val baseline = prefs.getString(cloudSharedFingerprintKey, null)
-            val localFingerprint = sharedFingerprint(localShared)
-            val remoteFingerprint = remoteShared?.let { sharedFingerprint(it) }
-
-            if (
-                !forcePhoneData &&
-                remoteShared != null &&
-                remoteFingerprint == localFingerprint
-            ) {
-                // The portfolio is already identical on both sides. Treat this as a
-                // successful sync and re-anchor the baseline instead of reporting a
-                // false "both changed" conflict from an older baseline.
-                saveCloudBaseline(remoteShared)
-                markCloudSync()
-                Toast.makeText(this, "Phone and Cloud already match.", Toast.LENGTH_SHORT).show()
-                if (onPortfolioScreen) {
-                    showPortfolioScreen()
-                }
-                return
-            }
-
-            if (!forcePhoneData && remoteShared != null) {
-                val remoteChanged = baseline != null && remoteFingerprint != baseline
-                val localChanged = baseline != null && localFingerprint != baseline
-                val firstSyncConflict = baseline == null && remoteFingerprint != localFingerprint
-
-                if ((remoteChanged && localChanged) || firstSyncConflict) {
-                    val changedRows = sharedChangeCount(localShared, remoteShared)
-                    AlertDialog.Builder(this)
-                        .setTitle("Cloud Sync Conflict")
-                        .setMessage(
-                            "Both copies may contain changes. " + changedRows +
-                                " asset row(s) differ. Choose which portfolio to keep. " +
-                                "Platform-specific Windows/Android data will still be preserved."
-                        )
-                        .setNegativeButton("Cancel", null)
-                        .setNeutralButton("Use Cloud") { _, _ ->
-                            loadFromCloud()
-                        }
-                        .setPositiveButton("Use Phone") { _, _ ->
-                            syncToCloud(forcePhoneData = true)
-                        }
-                        .show()
-                    return
-                }
-
-                if (remoteChanged && !localChanged) {
-                    loadFromCloud()
-                    return
-                }
-            }
-
-            val document = mergedBackupDocument(existingRaw)
-            val stream = contentResolver.openOutputStream(uri, "wt")
-                ?: throw IllegalStateException("Could not open the cloud backup file for writing.")
-
-            stream.bufferedWriter().use { writer ->
-                writer.write(document.toString(2))
-            }
-
-            saveCloudBaseline(document.getJSONObject("sharedPortfolio"))
-            markCloudSync()
-            Toast.makeText(this, "Cloud backup updated safely.", Toast.LENGTH_SHORT).show()
-            if (onPortfolioScreen) {
-                showPortfolioScreen()
-            }
-        } catch (error: Exception) {
-            showCloudAccessError(
-                "Cloud Sync Failed",
-                error.message ?: "Could not write the backup file."
-            )
-        }
+        )
     }
 
     private fun confirmLoadFromCloud() {
@@ -4180,34 +4440,86 @@ class MainActivity : Activity() {
             return
         }
 
-        try {
-            val raw = contentResolver.openInputStream(uri)?.bufferedReader()?.use { it.readText() }
-                ?: throw IllegalStateException("Could not read the cloud backup file.")
+        runStorageOperation(
+            label = "Loading cloud data",
+            task = {
+                val raw = readUriText(uri)
+                val validated = PortfolioSafety.validateBackup(raw)
+                require(validated.kind == PortfolioSafety.BackupKind.SHARED) {
+                    "Connected cloud file is not a shared portfolio."
+                }
+                raw
+            },
+            onSuccess = ::applyCloudRaw,
+            onFailure = { error ->
+                showCloudAccessError(
+                    "Cloud Load Failed",
+                    error.message ?: "Could not read the backup file."
+                )
+            }
+        )
+    }
 
-            val root = JSONObject(raw)
+    private fun applyCloudRaw(raw: String, expectedLocalFingerprint: String? = null) {
+        try {
+            if (
+                expectedLocalFingerprint != null &&
+                sharedFingerprint(buildSharedPortfolio()) != expectedLocalFingerprint
+            ) {
+                throw IllegalStateException(
+                    "Phone data changed while sync was running. Nothing was overwritten; run sync again."
+                )
+            }
+            val validated = PortfolioSafety.validateBackup(raw)
+            require(validated.kind == PortfolioSafety.BackupKind.SHARED) {
+                "Connected cloud file is not a shared portfolio."
+            }
             restoreBackupJson(raw)
-            root.takeIf { it.optString("format") == "investment.shared.portfolio" }
-                ?.optJSONObject("sharedPortfolio")
-                ?.let { saveCloudBaseline(it) }
+            validated.sharedPortfolio?.let(::saveCloudBaseline)
             markCloudSync()
-            Toast.makeText(this, "Cloud backup loaded.", Toast.LENGTH_SHORT).show()
+            Toast.makeText(this, "Cloud backup loaded safely.", Toast.LENGTH_SHORT).show()
             showPortfolioScreen()
         } catch (error: Exception) {
             showCloudAccessError(
                 "Cloud Load Failed",
-                error.message ?: "Could not read the backup file."
+                error.message ?: "Could not apply the backup file."
             )
         }
     }
 
     private fun showBackupDialog() {
+        val hasRecovery = getSharedPreferences(prefsName, MODE_PRIVATE)
+            .contains(preRestoreBackupKey)
+        val options = if (hasRecovery) {
+            arrayOf("Export Backup", "Import Backup", "Restore Previous Local Data")
+        } else {
+            arrayOf("Export Backup", "Import Backup")
+        }
         AlertDialog.Builder(this)
             .setTitle("Backup / Restore")
-            .setItems(arrayOf("Export Backup", "Import Backup")) { _, which ->
-                if (which == 0) {
-                    exportBackup()
-                } else {
-                    importBackup()
+            .setItems(options) { _, which ->
+                when (which) {
+                    0 -> exportBackup()
+                    1 -> importBackup()
+                    2 -> AlertDialog.Builder(this)
+                        .setTitle("Restore Previous Local Data?")
+                        .setMessage("This recovers the local portfolio preserved immediately before the last import or cloud restore.")
+                        .setNegativeButton("Cancel", null)
+                        .setPositiveButton("Restore") { _, _ ->
+                            try {
+                                pushUndoCheckpoint()
+                                restorePreviousLocalState()
+                                Toast.makeText(this, "Previous local data restored.", Toast.LENGTH_SHORT).show()
+                                showPortfolioScreen()
+                            } catch (error: Exception) {
+                                AlertDialog.Builder(this)
+                                    .setTitle("Recovery Failed")
+                                    .setMessage(error.message ?: "Could not restore previous local data.")
+                                    .setPositiveButton("OK", null)
+                                    .show()
+                            }
+                        }
+                        .show()
                 }
             }
             .setNegativeButton("Cancel", null)
@@ -4226,7 +4538,7 @@ class MainActivity : Activity() {
     private fun importBackup() {
         val intent = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
             addCategory(Intent.CATEGORY_OPENABLE)
-            type = "application/json"
+            type = "*/*"
         }
         startActivityForResult(intent, importBackupRequestCode)
     }
@@ -4322,7 +4634,7 @@ class MainActivity : Activity() {
         val folded = raw.lowercase(Locale.US)
         val source = item.optJSONObject("source")
         val sourceGroup = source?.optString("group_id", "")?.trim()?.lowercase(Locale.US) ?: ""
-        val sourceKind = source?.optString("group_kind", "")?.trim()?.lowercase(Locale.US) ?: ""
+        val sourceKind = source?.optString("kind", "")?.trim()?.lowercase(Locale.US) ?: ""
 
         val cashAliases = setOf("cash", "cash & currencies", "cash and currencies", "currencies", "currency", "bank", "banks")
         val cryptoAliases = setOf("crypto", "cryptocurrency", "cryptocurrencies")
@@ -4371,7 +4683,16 @@ class MainActivity : Activity() {
         return "name:" + category.lowercase(Locale.US) + ":" + name.lowercase(Locale.US)
     }
 
-    private fun importSharedPortfolio(portfolio: JSONObject) {
+    private data class SharedImportPlan(
+        val assets: List<Asset>,
+        val categories: List<String>,
+        val tolerance: Double
+    )
+
+    private fun buildSharedImportPlan(
+        portfolio: JSONObject,
+        supplemental: JSONObject?
+    ): SharedImportPlan {
         val rawAssets = portfolio.optJSONArray("assets")
             ?: throw IllegalArgumentException("Shared portfolio does not contain assets.")
 
@@ -4382,10 +4703,14 @@ class MainActivity : Activity() {
             val item = rawAssets.getJSONObject(index)
             val name = item.optString("name", "Asset").trim().ifBlank { "Asset" }
             val category = canonicalSharedCategory(item)
-            val quantity = item.optDouble("quantity", 1.0).coerceAtLeast(0.0)
-            val price = item.optDouble("price_toman", 0.0).coerceAtLeast(0.0)
-            val averageCost = item.optDouble("average_cost_toman", price).coerceAtLeast(0.0)
-            val target = item.optDouble("target_percent", 0.0).coerceIn(0.0, 100.0)
+            val quantity = item.getDouble("quantity")
+            val price = item.getDouble("price_toman")
+            val averageCost = if (item.has("average_cost_toman")) {
+                item.getDouble("average_cost_toman")
+            } else {
+                price
+            }
+            val target = item.optDouble("target_percent", 0.0)
             val included = item.optBoolean("include_in_target", target > 0.0)
             val symbol = item.optString("symbol", "").trim().uppercase(Locale.US)
             val source = item.optString("price_source", "Manual").let {
@@ -4400,7 +4725,7 @@ class MainActivity : Activity() {
             val importedAsset = Asset(
                 name = name,
                 category = category,
-                quantity = if (category == "Cash") 1.0 else quantity.coerceAtLeast(0.0000001),
+                quantity = if (category == "Cash") 1.0 else quantity,
                 price = price,
                 averageCost = if (category == "Cash") price else averageCost,
                 targetPercent = target,
@@ -4418,51 +4743,84 @@ class MainActivity : Activity() {
             importedByKey[sharedImportKey(item, category, name, symbol)] = importedAsset
         }
 
-        val imported = importedByKey.values.toMutableList()
-        val sharedTolerance = portfolio.optDouble(
-            "rebalance_tolerance_percent",
-            loadTolerance()
-        ).coerceIn(0.0, 20.0)
-
-        pushUndoCheckpoint()
-        saveAssets(imported)
-        saveCategories(categories)
-        saveTolerance(sharedTolerance)
-        recordSnapshot(imported)
-    }
-
-    private fun restoreAndroidSupplementalPayload(root: JSONObject) {
-        val transactions = root.optJSONArray("transactions") ?: JSONArray()
-        val snapshots = root.optJSONArray("snapshots") ?: JSONArray()
-        val displayUnit = root.optString("displayUnit", loadDisplayUnit())
-        val summaryPeriod = root.optString("summaryPeriod", loadSummaryPeriod())
-        val autoRefreshMinutes = root.optInt("autoRefreshMinutes", loadAutoRefreshMinutes())
-        val savedCategories = root.optJSONArray("categories")
-
-        val categories = loadCategories()
-        if (savedCategories != null) {
+        supplemental?.optJSONArray("categories")?.let { savedCategories ->
             for (index in 0 until savedCategories.length()) {
-                val value = savedCategories.optString(index, "").trim()
+                val value = savedCategories.getString(index).trim()
                 if (value.isNotBlank() && categories.none { it.equals(value, ignoreCase = true) }) {
                     categories.add(value)
                 }
             }
         }
 
-        getSharedPreferences(prefsName, MODE_PRIVATE)
-            .edit()
+        val sharedTolerance = portfolio.optDouble(
+            "rebalance_tolerance_percent",
+            loadTolerance()
+        )
+
+        return SharedImportPlan(
+            assets = importedByKey.values.toList(),
+            categories = categories,
+            tolerance = sharedTolerance
+        )
+    }
+
+    private fun snapshotsWithCurrentTotal(source: JSONArray, assets: List<Asset>): JSONArray {
+        val result = JSONArray()
+        val start = (source.length() - 99).coerceAtLeast(0)
+        for (index in start until source.length()) {
+            result.put(source.get(index))
+        }
+        result.put(
+            JSONObject().apply {
+                put("totalValue", assets.sumOf { it.value })
+                put("timestamp", System.currentTimeMillis())
+            }
+        )
+        return result
+    }
+
+    private fun applySharedBackup(validated: PortfolioSafety.ValidatedBackup) {
+        val portfolio = validated.sharedPortfolio
+            ?: throw IllegalArgumentException("Shared portfolio payload is missing.")
+        PortfolioSafety.ensureSafeReplacement(loadAssets().size, validated.incomingAssetCount)
+
+        val supplemental = validated.androidPayload
+        val plan = buildSharedImportPlan(portfolio, supplemental)
+        val prefs = getSharedPreferences(prefsName, MODE_PRIVATE)
+        val transactions = supplemental?.optJSONArray("transactions")
+            ?: JSONArray(prefs.getString(transactionsKey, "[]") ?: "[]")
+        val sourceSnapshots = supplemental?.optJSONArray("snapshots")
+            ?: JSONArray(prefs.getString(snapshotsKey, "[]") ?: "[]")
+        val displayUnit = supplemental?.optString("displayUnit", loadDisplayUnit())
+            ?: loadDisplayUnit()
+        val summaryPeriod = supplemental?.optString("summaryPeriod", loadSummaryPeriod())
+            ?: loadSummaryPeriod()
+        val autoRefreshMinutes = supplemental?.optInt(
+            "autoRefreshMinutes",
+            loadAutoRefreshMinutes()
+        ) ?: loadAutoRefreshMinutes()
+
+        preservePreRestoreState()
+        pushUndoCheckpoint()
+        val committed = prefs.edit()
+            .putString(assetsKey, assetsToJsonArray(plan.assets).toString())
             .putString(transactionsKey, transactions.toString())
-            .putString(snapshotsKey, snapshots.toString())
+            .putString(snapshotsKey, snapshotsWithCurrentTotal(sourceSnapshots, plan.assets).toString())
+            .putString(toleranceKey, plan.tolerance.toString())
             .putString(displayUnitKey, displayUnit)
             .putString(summaryPeriodKey, summaryPeriod)
             .putInt(autoRefreshMinutesKey, autoRefreshMinutes)
-            .putString(categoriesKey, JSONArray(categories).toString())
-            .apply()
+            .putString(categoriesKey, JSONArray(plan.categories).toString())
+            .commit()
+
+        check(committed) { "Android could not save the restored portfolio. Local data was not changed." }
 
         scheduleAutoRefresh()
     }
 
-    private fun restoreAndroidBackupPayload(root: JSONObject) {
+    private fun applyLegacyAndroidBackup(validated: PortfolioSafety.ValidatedBackup) {
+        val root = validated.root
+        PortfolioSafety.ensureSafeReplacement(loadAssets().size, validated.incomingAssetCount)
         val assets = root.getJSONArray("assets")
         val transactions = root.optJSONArray("transactions") ?: JSONArray()
         val snapshots = root.optJSONArray("snapshots") ?: JSONArray()
@@ -4472,10 +4830,9 @@ class MainActivity : Activity() {
         val autoRefreshMinutes = root.optInt("autoRefreshMinutes", 0)
         val categories = root.optJSONArray("categories") ?: JSONArray(coreCategories)
 
+        preservePreRestoreState()
         pushUndoCheckpoint()
-
-        getSharedPreferences(prefsName, MODE_PRIVATE)
-            .edit()
+        val committed = getSharedPreferences(prefsName, MODE_PRIVATE).edit()
             .putString(assetsKey, assets.toString())
             .putString(transactionsKey, transactions.toString())
             .putString(snapshotsKey, snapshots.toString())
@@ -4484,7 +4841,9 @@ class MainActivity : Activity() {
             .putString(summaryPeriodKey, summaryPeriod)
             .putInt(autoRefreshMinutesKey, autoRefreshMinutes)
             .putString(categoriesKey, categories.toString())
-            .apply()
+            .commit()
+
+        check(committed) { "Android could not save the restored portfolio. Local data was not changed." }
 
         scheduleAutoRefresh()
     }
@@ -4500,25 +4859,11 @@ class MainActivity : Activity() {
     }
 
     private fun restoreBackupJson(raw: String) {
-        val root = JSONObject(raw)
-
-        if (root.optString("format") == "investment.shared.portfolio") {
-            require(root.optInt("schemaVersion", -1) == 1) {
-                "Unsupported shared portfolio schema. Local data was not changed."
-            }
-            val sharedPortfolio = root.optJSONObject("sharedPortfolio")
-                ?: throw IllegalArgumentException("Shared portfolio payload is missing.")
-
-            // Shared holdings are authoritative for cross-platform sync. Android-only
-            // history/settings are restored separately so a newer Windows portfolio
-            // cannot be overwritten by a stale androidBackup section.
-            importSharedPortfolio(sharedPortfolio)
-            root.optJSONObject("androidBackup")?.let { restoreAndroidSupplementalPayload(it) }
-            return
+        val validated = PortfolioSafety.validateBackup(raw)
+        when (validated.kind) {
+            PortfolioSafety.BackupKind.SHARED -> applySharedBackup(validated)
+            PortfolioSafety.BackupKind.LEGACY_ANDROID -> applyLegacyAndroidBackup(validated)
         }
-
-        // Backward compatibility with Android backup v1-v3.
-        restoreAndroidBackupPayload(root)
     }
 
     @Deprecated("Deprecated in Java")
@@ -4552,65 +4897,99 @@ class MainActivity : Activity() {
         try {
             when (requestCode) {
                 exportBackupRequestCode -> {
-                    contentResolver.openOutputStream(uri)?.bufferedWriter()?.use { writer ->
-                        writer.write(createBackupJson())
-                    }
-                    Toast.makeText(this, "Backup exported.", Toast.LENGTH_SHORT).show()
+                    runStorageOperation(
+                        label = "Exporting backup",
+                        task = {
+                            writeUriText(uri, createBackupJson())
+                            Unit
+                        },
+                        onSuccess = {
+                            Toast.makeText(this, "Backup exported safely.", Toast.LENGTH_SHORT).show()
+                        },
+                        onFailure = { error -> showBackupFileError(error) }
+                    )
                 }
 
                 importBackupRequestCode -> {
-                    val raw = contentResolver.openInputStream(uri)?.bufferedReader()?.use { it.readText() }
-                        ?: throw IllegalArgumentException("Could not read backup file.")
-                    restoreBackupJson(raw)
-                    Toast.makeText(this, "Backup restored.", Toast.LENGTH_SHORT).show()
-                    showPortfolioScreen()
+                    runStorageOperation(
+                        label = "Validating backup",
+                        task = {
+                            val raw = readUriText(uri)
+                            PortfolioSafety.validateBackup(raw)
+                            raw
+                        },
+                        onSuccess = { raw ->
+                            try {
+                                restoreBackupJson(raw)
+                                Toast.makeText(this, "Backup restored safely.", Toast.LENGTH_SHORT).show()
+                                showPortfolioScreen()
+                            } catch (error: Exception) {
+                                showBackupFileError(error)
+                            }
+                        },
+                        onFailure = { error -> showBackupFileError(error) }
+                    )
                 }
 
                 createCloudBackupRequestCode -> {
                     takePersistentCloudPermission(uri, data)
-                    saveCloudBackupUri(uri)
-                    val stream = contentResolver.openOutputStream(uri, "wt")
-                        ?: throw IllegalStateException("Could not create cloud backup file.")
-                    val document = mergedBackupDocument(null)
-                    stream.bufferedWriter().use { writer ->
-                        writer.write(document.toString(2))
-                    }
-                    saveCloudBaseline(document.getJSONObject("sharedPortfolio"))
-                    markCloudSync()
-                    Toast.makeText(this, "Cloud backup connected and saved.", Toast.LENGTH_SHORT).show()
-                    scheduleSmartCloudSync()
-                    if (onPortfolioScreen) {
-                        showPortfolioScreen()
-                    }
+                    runStorageOperation(
+                        label = "Creating cloud backup",
+                        task = {
+                            val document = mergedBackupDocument(null)
+                            writeUriText(uri, document.toString(2))
+                            document
+                        },
+                        onSuccess = { document ->
+                            saveCloudBackupUri(uri)
+                            saveCloudBaseline(document.getJSONObject("sharedPortfolio"))
+                            markCloudSync()
+                            Toast.makeText(this, "Cloud backup connected and saved.", Toast.LENGTH_SHORT).show()
+                            scheduleSmartCloudSync()
+                            if (onPortfolioScreen) showPortfolioScreen()
+                        },
+                        onFailure = { error ->
+                            showCloudAccessError(
+                                "Cloud Setup Failed",
+                                error.message ?: "Could not create the cloud backup file."
+                            )
+                        }
+                    )
                 }
 
                 connectCloudBackupRequestCode -> {
                     takePersistentCloudPermission(uri, data)
-                    val raw = contentResolver.openInputStream(uri)?.bufferedReader()?.use { it.readText() }
-                        ?: throw IllegalArgumentException("Could not read selected backup file.")
-
-                    val selected = JSONObject(raw)
-                    val valid = if (selected.optString("format") == "investment.shared.portfolio") {
-                        selected.optJSONObject("sharedPortfolio")
-                            ?.optJSONArray("assets") != null
-                    } else {
-                        selected.optJSONArray("assets") != null
-                    }
-                    if (!valid) {
-                        throw IllegalArgumentException("Selected file is not a compatible Investment backup.")
-                    }
-                    saveCloudBackupUri(uri)
-
-                    AlertDialog.Builder(this)
-                        .setTitle("Cloud Backup Connected")
-                        .setMessage("The file is connected. Load its data now or keep this phone's data?")
-                        .setNegativeButton("Keep Phone Data") { _, _ ->
-                            syncToCloud(forcePhoneData = true)
+                    runStorageOperation(
+                        label = "Validating cloud backup",
+                        task = {
+                            val raw = readUriText(uri)
+                            val selected = PortfolioSafety.validateBackup(raw)
+                            require(selected.kind == PortfolioSafety.BackupKind.SHARED) {
+                                "Cloud sync requires an investment.shared.portfolio file."
+                            }
+                            raw
+                        },
+                        onSuccess = {
+                            saveCloudBackupUri(uri)
+                            AlertDialog.Builder(this)
+                                .setTitle("Cloud Backup Connected")
+                                .setMessage(
+                                    "The file is valid and connected. Load its data now or keep this phone's data? " +
+                                        "Nothing will be overwritten until you choose."
+                                )
+                                .setNegativeButton("Keep Phone Data") { _, _ ->
+                                    syncToCloud(forcePhoneData = true)
+                                }
+                                .setPositiveButton("Load Cloud Data") { _, _ -> loadFromCloud() }
+                                .show()
+                        },
+                        onFailure = { error ->
+                            showCloudAccessError(
+                                "Cloud Connection Failed",
+                                error.message ?: "Could not validate the selected cloud file."
+                            )
                         }
-                        .setPositiveButton("Load Cloud Data") { _, _ ->
-                            loadFromCloud()
-                        }
-                        .show()
+                    )
                 }
             }
         } catch (error: Exception) {
@@ -4620,6 +4999,14 @@ class MainActivity : Activity() {
                 .setPositiveButton("OK", null)
                 .show()
         }
+    }
+
+    private fun showBackupFileError(error: Exception) {
+        AlertDialog.Builder(this)
+            .setTitle("Backup Error")
+            .setMessage(error.message ?: "Could not process the backup file. Local data was not changed.")
+            .setPositiveButton("OK", null)
+            .show()
     }
 
     private fun addRecentActivity(parent: LinearLayout) {
@@ -4675,7 +5062,7 @@ class MainActivity : Activity() {
     private fun confirmDeleteAsset(index: Int, asset: Asset) {
         AlertDialog.Builder(this)
             .setTitle("Delete " + asset.name + "?")
-            .setMessage("This removes the asset from this test portfolio.")
+            .setMessage("This removes the asset from your portfolio. You can undo it afterward.")
             .setNegativeButton("Cancel", null)
             .setPositiveButton("Delete") { _, _ ->
                 val assets = loadAssets()
