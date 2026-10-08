@@ -817,18 +817,20 @@ class MainActivity : Activity() {
 
             "Rial" -> {
                 scaledValue = value * 10.0
-                suffix = " Rial"
+                suffix = " " + ui("Rial")
                 decimals = 0
             }
 
             else -> {
                 scaledValue = value
-                suffix = " Toman"
+                suffix = " " + ui("Toman")
                 decimals = 0
             }
         }
 
-        val formatter = NumberFormat.getNumberInstance(Locale.US).apply {
+        val formatter = NumberFormat.getNumberInstance(
+            if (uiLanguage() == "fa") Locale("fa", "IR") else Locale.US
+        ).apply {
             maximumFractionDigits = decimals
             minimumFractionDigits = 0
         }
