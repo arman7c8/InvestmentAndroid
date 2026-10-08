@@ -2,7 +2,9 @@ package com.arman.investmentandroid
 
 import android.app.Activity
 import android.app.AlertDialog
+import android.content.Context
 import android.content.Intent
+import android.content.res.Configuration
 import android.graphics.Color
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
@@ -104,6 +106,7 @@ class MainActivity : Activity() {
     private val cloudAutoSyncMinutesKey = "cloud_auto_sync_minutes"
     private val cloudLastAutoCheckKey = "cloud_last_auto_check"
     private val preRestoreBackupKey = "pre_restore_backup_json"
+    private val uiLanguageKey = "ui_language"
     private val exportBackupRequestCode = 1001
     private val importBackupRequestCode = 1002
     private val createCloudBackupRequestCode = 1003
@@ -128,17 +131,46 @@ class MainActivity : Activity() {
     private fun dp(value: Int): Int =
         (value * resources.displayMetrics.density).toInt()
 
+    private fun uiLanguage(): String =
+        getSharedPreferences(prefsName, MODE_PRIVATE).getString(
+            uiLanguageKey,
+            if (Locale.getDefault().language == "fa") "fa" else "en"
+        ) ?: "en"
+
+    private fun ui(value: String): String = UiText.translate(value, uiLanguage())
+
+    override fun attachBaseContext(base: Context) {
+        val language = base.getSharedPreferences(prefsName, MODE_PRIVATE)
+            .getString(uiLanguageKey, null)
+            ?: if (Locale.getDefault().language == "fa") "fa" else "en"
+        val configuration = Configuration(base.resources.configuration)
+        configuration.setLocale(Locale(language))
+        configuration.setLayoutDirection(Locale(language))
+        super.attachBaseContext(base.createConfigurationContext(configuration))
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        window.decorView.layoutDirection = View.LAYOUT_DIRECTION_LOCALE
+        window.decorView.layoutDirection =
+            if (uiLanguage() == "fa") View.LAYOUT_DIRECTION_RTL else View.LAYOUT_DIRECTION_LTR
         ensureSeedData()
 
         if (isAppLockEnabled()) {
             showLockedScreen()
             showStartupUnlockDialog()
+        } else if (savedInstanceState?.getBoolean("price_center_screen") == true) {
+            showPriceCenterScreen()
+        } else if (savedInstanceState?.getBoolean("portfolio_screen") == true) {
+            showPortfolioScreen()
         } else {
             showWelcomeScreen()
         }
+    }
+
+    override fun onSaveInstanceState(outState: Bundle) {
+        outState.putBoolean("portfolio_screen", onPortfolioScreen)
+        outState.putBoolean("price_center_screen", onPriceCenterScreen)
+        super.onSaveInstanceState(outState)
     }
 
     override fun onResume() {
@@ -682,10 +714,9 @@ class MainActivity : Activity() {
     }
 
     private fun saveTransactions(transactions: List<Transaction>) {
-        val trimmed = transactions.takeLast(100)
         val array = JSONArray()
 
-        trimmed.forEach { transaction ->
+        transactions.forEach { transaction ->
             array.put(
                 JSONObject().apply {
                     put("id", transaction.id)
@@ -736,7 +767,7 @@ class MainActivity : Activity() {
 
     private fun saveSnapshots(snapshots: List<Snapshot>) {
         val array = JSONArray()
-        snapshots.takeLast(100).forEach { snapshot ->
+        snapshots.forEach { snapshot ->
             array.put(
                 JSONObject().apply {
                     put("totalValue", snapshot.totalValue)
@@ -951,7 +982,7 @@ class MainActivity : Activity() {
 
         root.addView(
             TextView(this).apply {
-                text = "Investment Android"
+                text = ui("Investment Android")
                 textSize = 28f
                 setTypeface(typeface, Typeface.BOLD)
                 gravity = Gravity.CENTER
@@ -961,7 +992,7 @@ class MainActivity : Activity() {
 
         root.addView(
             TextView(this).apply {
-                text = "App Locked"
+                text = ui("App Locked")
                 textSize = 16f
                 gravity = Gravity.CENTER
                 setTextColor(Color.GRAY)
@@ -974,7 +1005,7 @@ class MainActivity : Activity() {
 
     private fun pinInput(): EditText {
         return EditText(this).apply {
-            hint = "4–8 digit PIN"
+            hint = ui("4–8 digit PIN")
             inputType = InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_VARIATION_PASSWORD
             setPadding(dp(20), dp(8), dp(20), 0)
         }
@@ -983,10 +1014,10 @@ class MainActivity : Activity() {
     private fun showStartupUnlockDialog() {
         val input = pinInput()
         val dialog = AlertDialog.Builder(this)
-            .setTitle("Unlock Investment")
-            .setMessage("Enter your app PIN.")
+            .setTitle(ui("Unlock Investment"))
+            .setMessage(ui("Enter your app PIN."))
             .setView(input)
-            .setPositiveButton("Unlock", null)
+            .setPositiveButton(ui("Unlock"), null)
             .create()
 
         dialog.setCancelable(false)
@@ -1016,17 +1047,17 @@ class MainActivity : Activity() {
 
         val pin = pinInput()
         val confirm = pinInput().apply {
-            hint = "Confirm PIN"
+            hint = ui("Confirm PIN")
         }
         form.addView(pin)
         form.addView(confirm)
 
         val dialog = AlertDialog.Builder(this)
             .setTitle(if (isAppLockEnabled()) "Change App PIN" else "Enable App Lock")
-            .setMessage("Use a 4–8 digit PIN. The PIN itself is not stored.")
+            .setMessage(ui("Use a 4–8 digit PIN. The PIN itself is not stored."))
             .setView(form)
-            .setNegativeButton("Cancel", null)
-            .setPositiveButton("Save", null)
+            .setNegativeButton(ui("Cancel"), null)
+            .setPositiveButton(ui("Save"), null)
             .create()
 
         dialog.setOnShowListener {
@@ -1055,10 +1086,10 @@ class MainActivity : Activity() {
     private fun verifyCurrentPinThen(action: () -> Unit) {
         val input = pinInput()
         val dialog = AlertDialog.Builder(this)
-            .setTitle("Verify Current PIN")
+            .setTitle(ui("Verify Current PIN"))
             .setView(input)
-            .setNegativeButton("Cancel", null)
-            .setPositiveButton("Continue", null)
+            .setNegativeButton(ui("Cancel"), null)
+            .setPositiveButton(ui("Continue"), null)
             .create()
 
         dialog.setOnShowListener {
@@ -1083,8 +1114,8 @@ class MainActivity : Activity() {
         }
 
         AlertDialog.Builder(this)
-            .setTitle("App Lock")
-            .setMessage("App lock is enabled.")
+            .setTitle(ui("App Lock"))
+            .setMessage(ui("App lock is enabled."))
             .setItems(arrayOf("Change PIN", "Remove App Lock")) { _, which ->
                 when (which) {
                     0 -> verifyCurrentPinThen { showSetPinDialog() }
@@ -1094,7 +1125,7 @@ class MainActivity : Activity() {
                     }
                 }
             }
-            .setNegativeButton("Close", null)
+            .setNegativeButton(ui("Close"), null)
             .show()
     }
 
@@ -1184,7 +1215,7 @@ class MainActivity : Activity() {
         }
 
         val title = TextView(this).apply {
-            text = "Investment Android"
+            text = ui("Investment Android")
             textSize = 30f
             setTypeface(typeface, Typeface.BOLD)
             gravity = Gravity.CENTER
@@ -1192,7 +1223,7 @@ class MainActivity : Activity() {
         }
 
         val subtitle = TextView(this).apply {
-            text = "Your portfolio, one step closer to mobile.\nv${BuildConfig.VERSION_NAME}"
+            text = ui("Your portfolio, one step closer to mobile.\nv${BuildConfig.VERSION_NAME}")
             textSize = 17f
             gravity = Gravity.CENTER
             setTextColor(Color.DKGRAY)
@@ -1200,7 +1231,7 @@ class MainActivity : Activity() {
         }
 
         val startButton = Button(this).apply {
-            text = "Open Portfolio"
+            text = ui("Open Portfolio")
             isAllCaps = false
             textSize = 17f
             setOnClickListener { showPortfolioScreen() }
@@ -1245,7 +1276,7 @@ class MainActivity : Activity() {
 
         container.addView(
             TextView(this).apply {
-                text = "My Portfolio"
+                text = ui("My Portfolio")
                 textSize = 28f
                 setTypeface(typeface, Typeface.BOLD)
                 setTextColor(Color.rgb(30, 30, 30))
@@ -1273,7 +1304,7 @@ class MainActivity : Activity() {
         if (assets.isEmpty()) {
             container.addView(
                 TextView(this).apply {
-                    text = "No assets yet. Tap Add Asset to create your first one."
+                    text = ui("No assets yet. Tap Add Asset to create your first one.")
                     textSize = 16f
                     setTextColor(Color.DKGRAY)
                     setPadding(0, dp(14), 0, dp(22))
@@ -1290,21 +1321,21 @@ class MainActivity : Activity() {
         }
 
         val addButton = Button(this).apply {
-            text = "+ Add Asset"
+            text = ui("+ Add Asset")
             isAllCaps = false
             textSize = 16f
             setOnClickListener { showAssetDialog() }
         }
 
         val priceCenterButton = Button(this).apply {
-            text = "Price Center"
+            text = ui("Price Center")
             isAllCaps = false
             textSize = 16f
             setOnClickListener { showPriceCenterScreen() }
         }
 
         val targetsButton = Button(this).apply {
-            text = "Edit Targets"
+            text = ui("Edit Targets")
             isAllCaps = false
             textSize = 16f
             setOnClickListener { showTargetsDialog() }
@@ -1318,35 +1349,35 @@ class MainActivity : Activity() {
         }
 
         val activityButton = Button(this).apply {
-            text = "Activity"
+            text = ui("Activity")
             isAllCaps = false
             textSize = 16f
             setOnClickListener { showActivityDialog() }
         }
 
         val moreToolsButton = Button(this).apply {
-            text = "More Tools"
+            text = ui("More Tools")
             isAllCaps = false
             textSize = 16f
             setOnClickListener { showToolsDialog() }
         }
 
         val historyButton = Button(this).apply {
-            text = "Portfolio History"
+            text = ui("Portfolio History")
             isAllCaps = false
             textSize = 16f
             setOnClickListener { showHistoryDialog() }
         }
 
         val categoriesButton = Button(this).apply {
-            text = "Manage Categories"
+            text = ui("Manage Categories")
             isAllCaps = false
             textSize = 16f
             setOnClickListener { showCategoryManagerDialog() }
         }
 
         val undoButton = Button(this).apply {
-            text = "Undo"
+            text = ui("Undo")
             isAllCaps = false
             textSize = 16f
             isEnabled = loadStateStack(undoStackKey).isNotEmpty()
@@ -1354,7 +1385,7 @@ class MainActivity : Activity() {
         }
 
         val redoButton = Button(this).apply {
-            text = "Redo"
+            text = ui("Redo")
             isAllCaps = false
             textSize = 16f
             isEnabled = loadStateStack(redoStackKey).isNotEmpty()
@@ -1362,28 +1393,28 @@ class MainActivity : Activity() {
         }
 
         val settingsButton = Button(this).apply {
-            text = "Settings"
+            text = ui("Settings")
             isAllCaps = false
             textSize = 16f
             setOnClickListener { showSettingsDialog() }
         }
 
         val backupButton = Button(this).apply {
-            text = "Backup / Restore"
+            text = ui("Backup / Restore")
             isAllCaps = false
             textSize = 16f
             setOnClickListener { showBackupDialog() }
         }
 
         val resetButton = Button(this).apply {
-            text = "Reset Portfolio"
+            text = ui("Reset Portfolio")
             isAllCaps = false
             setOnClickListener {
                 AlertDialog.Builder(this@MainActivity)
-                    .setTitle("Reset portfolio?")
-                    .setMessage("This will delete all assets and transaction history. You can undo it afterward.")
-                    .setNegativeButton("Cancel", null)
-                    .setPositiveButton("Reset") { _, _ ->
+                    .setTitle(ui("Reset portfolio?"))
+                    .setMessage(ui("This will delete all assets and transaction history. You can undo it afterward."))
+                    .setNegativeButton(ui("Cancel"), null)
+                    .setPositiveButton(ui("Reset")) { _, _ ->
                         pushUndoCheckpoint()
                         saveAssets(emptyList())
                         saveTransactions(emptyList())
@@ -1395,7 +1426,7 @@ class MainActivity : Activity() {
         }
 
         val backButton = Button(this).apply {
-            text = "Back"
+            text = ui("Back")
             isAllCaps = false
             setOnClickListener { showWelcomeScreen() }
         }
@@ -1411,7 +1442,7 @@ class MainActivity : Activity() {
 
         container.addView(
             TextView(this).apply {
-                text = "Quick Actions"
+                text = ui("Quick Actions")
                 textSize = 19f
                 setTypeface(typeface, Typeface.BOLD)
                 setTextColor(Color.rgb(35, 35, 35))
@@ -1473,7 +1504,7 @@ class MainActivity : Activity() {
         container.addView(backButton, buttonParams)
         container.addView(
             TextView(this).apply {
-                text = "Investment Android • v${BuildConfig.VERSION_NAME}"
+                text = ui("Investment Android • v${BuildConfig.VERSION_NAME}")
                 textSize = 12f
                 gravity = Gravity.CENTER
                 setTextColor(Color.GRAY)
@@ -1536,7 +1567,7 @@ class MainActivity : Activity() {
 
         textBlock.addView(
             TextView(this).apply {
-                text = "Cloud Sync"
+                text = ui("Cloud Sync")
                 textSize = 15f
                 setTypeface(typeface, Typeface.BOLD)
                 setTextColor(Color.rgb(35, 35, 35))
@@ -1644,7 +1675,7 @@ class MainActivity : Activity() {
 
         card.addView(
             TextView(this).apply {
-                text = "Total Portfolio Value"
+                text = ui("Total Portfolio Value")
                 textSize = 13f
                 setTextColor(Color.GRAY)
             }
@@ -1662,7 +1693,7 @@ class MainActivity : Activity() {
 
         card.addView(
             TextView(this).apply {
-                text = "Invested: " + formatToman(totalInvested)
+                text = ui("Invested: ") + formatToman(totalInvested)
                 textSize = 13f
                 setTextColor(Color.DKGRAY)
             }
@@ -1670,7 +1701,7 @@ class MainActivity : Activity() {
 
         card.addView(
             TextView(this).apply {
-                text = "Unrealized P/L: " + formatSignedToman(totalProfit)
+                text = ui("Unrealized P/L: ") + formatSignedToman(totalProfit)
                 textSize = 15f
                 setTypeface(typeface, Typeface.BOLD)
                 setTextColor(
@@ -1687,7 +1718,7 @@ class MainActivity : Activity() {
         if (snapshotChange != null) {
             card.addView(
                 TextView(this).apply {
-                    text = "Since previous snapshot: " + formatSignedToman(snapshotChange)
+                    text = ui("Since previous snapshot: ") + formatSignedToman(snapshotChange)
                     textSize = 13f
                     setTextColor(
                         when {
@@ -1757,7 +1788,7 @@ class MainActivity : Activity() {
     ) {
         parent.addView(
             TextView(this).apply {
-                text = "Category Breakdown"
+                text = ui("Category Breakdown")
                 textSize = 19f
                 setTypeface(typeface, Typeface.BOLD)
                 setTextColor(Color.rgb(35, 35, 35))
@@ -1812,7 +1843,7 @@ class MainActivity : Activity() {
     ) {
         parent.addView(
             TextView(this).apply {
-                text = "Holdings"
+                text = ui("Holdings")
                 textSize = 21f
                 setTypeface(typeface, Typeface.BOLD)
                 setTextColor(Color.rgb(35, 35, 35))
@@ -1889,7 +1920,7 @@ class MainActivity : Activity() {
         )
 
         AlertDialog.Builder(this)
-            .setTitle("Portfolio Tools")
+            .setTitle(ui("Portfolio Tools"))
             .setItems(options) { _, which ->
                 when (which) {
                     0 -> sharePrivacySafeAiSummary()
@@ -1904,16 +1935,16 @@ class MainActivity : Activity() {
                     9 -> showResetDemoDialog()
                 }
             }
-            .setNegativeButton("Close", null)
+            .setNegativeButton(ui("Close"), null)
             .show()
     }
 
     private fun showResetDemoDialog() {
         AlertDialog.Builder(this)
-            .setTitle("Reset portfolio?")
-            .setMessage("This will delete all assets and transaction history. You can undo it afterward.")
-            .setNegativeButton("Cancel", null)
-            .setPositiveButton("Reset") { _, _ ->
+            .setTitle(ui("Reset portfolio?"))
+            .setMessage(ui("This will delete all assets and transaction history. You can undo it afterward."))
+            .setNegativeButton(ui("Cancel"), null)
+            .setPositiveButton(ui("Reset")) { _, _ ->
                 pushUndoCheckpoint()
                 saveAssets(emptyList())
                 saveTransactions(emptyList())
@@ -1994,7 +2025,7 @@ class MainActivity : Activity() {
         val options = categories + "+ Add Category"
 
         AlertDialog.Builder(this)
-            .setTitle("Categories")
+            .setTitle(ui("Categories"))
             .setItems(options.toTypedArray()) { _, which ->
                 if (which == categories.size) {
                     showAddCategoryDialog()
@@ -2003,30 +2034,30 @@ class MainActivity : Activity() {
                     if (coreCategories.contains(category)) {
                         AlertDialog.Builder(this)
                             .setTitle(category)
-                            .setMessage("This is a core category used by portfolio logic. Add a custom category if you need a different label.")
-                            .setPositiveButton("OK", null)
+                            .setMessage(ui("This is a core category used by portfolio logic. Add a custom category if you need a different label."))
+                            .setPositiveButton(ui("OK"), null)
                             .show()
                     } else {
                         showCustomCategoryActions(category)
                     }
                 }
             }
-            .setNegativeButton("Close", null)
+            .setNegativeButton(ui("Close"), null)
             .show()
     }
 
     private fun showAddCategoryDialog() {
         val input = EditText(this).apply {
-            hint = "Category name"
+            hint = ui("Category name")
             inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_CAP_SENTENCES
             setPadding(dp(20), dp(8), dp(20), 0)
         }
 
         val dialog = AlertDialog.Builder(this)
-            .setTitle("Add Category")
+            .setTitle(ui("Add Category"))
             .setView(input)
-            .setNegativeButton("Cancel", null)
-            .setPositiveButton("Add", null)
+            .setNegativeButton(ui("Cancel"), null)
+            .setPositiveButton(ui("Add"), null)
             .create()
 
         dialog.setOnShowListener {
@@ -2062,23 +2093,23 @@ class MainActivity : Activity() {
                     confirmDeleteCategory(category)
                 }
             }
-            .setNegativeButton("Cancel", null)
+            .setNegativeButton(ui("Cancel"), null)
             .show()
     }
 
     private fun showRenameCategoryDialog(oldName: String) {
         val input = EditText(this).apply {
-            hint = "Category name"
+            hint = ui("Category name")
             inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_CAP_SENTENCES
             setText(oldName)
             setPadding(dp(20), dp(8), dp(20), 0)
         }
 
         val dialog = AlertDialog.Builder(this)
-            .setTitle("Rename Category")
+            .setTitle(ui("Rename Category"))
             .setView(input)
-            .setNegativeButton("Cancel", null)
-            .setPositiveButton("Save", null)
+            .setNegativeButton(ui("Cancel"), null)
+            .setPositiveButton(ui("Save"), null)
             .create()
 
         dialog.setOnShowListener {
@@ -2129,10 +2160,10 @@ class MainActivity : Activity() {
         }
 
         AlertDialog.Builder(this)
-            .setTitle("Delete " + category + "?")
+            .setTitle(ui("Delete ") + category + "?")
             .setMessage(message)
-            .setNegativeButton("Cancel", null)
-            .setPositiveButton("Delete") { _, _ ->
+            .setNegativeButton(ui("Cancel"), null)
+            .setPositiveButton(ui("Delete")) { _, _ ->
                 val categories = loadCategories()
                 val assets = loadAssets()
 
@@ -2161,7 +2192,7 @@ class MainActivity : Activity() {
         fun addLabel(textValue: String) {
             form.addView(
                 TextView(this).apply {
-                    text = textValue
+                    text = ui(textValue)
                     textSize = 14f
                     setTypeface(typeface, Typeface.BOLD)
                     setTextColor(Color.DKGRAY)
@@ -2170,12 +2201,20 @@ class MainActivity : Activity() {
             )
         }
 
+        addLabel("Language / زبان")
+        val languageSpinner = Spinner(this)
+        languageSpinner.adapter = ArrayAdapter(
+            this, android.R.layout.simple_spinner_item, listOf("English", "فارسی")
+        ).apply { setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item) }
+        languageSpinner.setSelection(if (uiLanguage() == "fa") 1 else 0)
+        form.addView(languageSpinner)
+
         addLabel("Display unit")
         val unitSpinner = Spinner(this)
         val unitAdapter = ArrayAdapter(
             this,
             android.R.layout.simple_spinner_item,
-            displayUnits
+            displayUnits.map(::ui)
         ).apply {
             setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item)
         }
@@ -2190,7 +2229,7 @@ class MainActivity : Activity() {
         val periodAdapter = ArrayAdapter(
             this,
             android.R.layout.simple_spinner_item,
-            summaryPeriods
+            summaryPeriods.map(::ui)
         ).apply {
             setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item)
         }
@@ -2217,22 +2256,26 @@ class MainActivity : Activity() {
         form.addView(refreshSpinner)
 
         val dialog = AlertDialog.Builder(this)
-            .setTitle("Settings")
+            .setTitle(ui("Settings"))
             .setView(form)
-            .setNegativeButton("Cancel", null)
-            .setPositiveButton("Save", null)
+            .setNegativeButton(ui("Cancel"), null)
+            .setPositiveButton(ui("Save"), null)
             .create()
 
         dialog.setOnShowListener {
             dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
-                val unit = unitSpinner.selectedItem.toString()
-                val period = periodSpinner.selectedItem.toString()
+                val unit = displayUnits[unitSpinner.selectedItemPosition]
+                val period = summaryPeriods[periodSpinner.selectedItemPosition]
                 val refresh = autoRefreshValues[refreshSpinner.selectedItemPosition]
+                val language = if (languageSpinner.selectedItemPosition == 1) "fa" else "en"
 
                 saveSettings(unit, period, refresh)
+                val languageChanged = language != uiLanguage()
+                getSharedPreferences(prefsName, MODE_PRIVATE).edit()
+                    .putString(uiLanguageKey, language).apply()
                 scheduleAutoRefresh()
                 dialog.dismiss()
-                showPortfolioScreen()
+                if (languageChanged) recreate() else showPortfolioScreen()
             }
         }
 
@@ -2268,7 +2311,7 @@ class MainActivity : Activity() {
             )
 
             val input = EditText(this).apply {
-                hint = "Target %"
+                hint = ui("Target %")
                 inputType = InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_FLAG_DECIMAL
                 setText(formatQuantity(asset.targetPercent))
             }
@@ -2281,11 +2324,11 @@ class MainActivity : Activity() {
         }
 
         val dialog = AlertDialog.Builder(this)
-            .setTitle("Edit Target Allocation")
-            .setMessage("Targets must add up to 100%.")
+            .setTitle(ui("Edit Target Allocation"))
+            .setMessage(ui("Targets must add up to 100%."))
             .setView(scroll)
-            .setNegativeButton("Cancel", null)
-            .setPositiveButton("Save", null)
+            .setNegativeButton(ui("Cancel"), null)
+            .setPositiveButton(ui("Save"), null)
             .create()
 
         dialog.setOnShowListener {
@@ -2317,7 +2360,7 @@ class MainActivity : Activity() {
                     return@setOnClickListener
                 }
 
-                val updatedAssets = loadAssets()
+                val updatedAssets = currentAssets.toMutableList()
                 pushUndoCheckpoint()
                 updatedTargets.forEach { (index, target) ->
                     if (index in updatedAssets.indices) {
@@ -2336,18 +2379,18 @@ class MainActivity : Activity() {
 
     private fun showToleranceDialog() {
         val input = EditText(this).apply {
-            hint = "Tolerance (%)"
+            hint = ui("Tolerance (%)")
             inputType = InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_FLAG_DECIMAL
             setText(formatQuantity(loadTolerance()))
             setPadding(dp(20), dp(8), dp(20), 0)
         }
 
         val dialog = AlertDialog.Builder(this)
-            .setTitle("Rebalance Tolerance")
-            .setMessage("Assets within this distance from target are treated as on target.")
+            .setTitle(ui("Rebalance Tolerance"))
+            .setMessage(ui("Assets within this distance from target are treated as on target."))
             .setView(input)
-            .setNegativeButton("Cancel", null)
-            .setPositiveButton("Save", null)
+            .setNegativeButton(ui("Cancel"), null)
+            .setPositiveButton(ui("Save"), null)
             .create()
 
         dialog.setOnShowListener {
@@ -2378,7 +2421,7 @@ class MainActivity : Activity() {
     ) {
         parent.addView(
             TextView(this).apply {
-                text = "Rebalance Summary"
+                text = ui("Rebalance Summary")
                 textSize = 21f
                 setTypeface(typeface, Typeface.BOLD)
                 setTextColor(Color.rgb(35, 35, 35))
@@ -2389,7 +2432,7 @@ class MainActivity : Activity() {
         if (kotlin.math.abs(totalTarget - 100.0) > 0.01) {
             parent.addView(
                 TextView(this).apply {
-                    text = "Set targets to a total of 100% to activate rebalance guidance."
+                    text = ui("Set targets to a total of 100% to activate rebalance guidance.")
                     textSize = 14f
                     setTextColor(Color.GRAY)
                     setPadding(0, 0, 0, dp(10))
@@ -2418,7 +2461,7 @@ class MainActivity : Activity() {
         if (actions.isEmpty()) {
             parent.addView(
                 TextView(this).apply {
-                    text = "Portfolio is within tolerance. No rebalance action is needed."
+                    text = ui("Portfolio is within tolerance. No rebalance action is needed.")
                     textSize = 14f
                     setTextColor(Color.rgb(25, 125, 70))
                     setPadding(0, 0, 0, dp(10))
@@ -2462,7 +2505,7 @@ class MainActivity : Activity() {
         }
 
         val nameInput = EditText(this).apply {
-            hint = "Asset name"
+            hint = ui("Asset name")
             inputType = InputType.TYPE_CLASS_TEXT
             setText(existing?.name ?: "")
         }
@@ -2472,7 +2515,7 @@ class MainActivity : Activity() {
         val categoryAdapter = ArrayAdapter(
             this,
             android.R.layout.simple_spinner_item,
-            availableCategories
+            availableCategories.map(::ui)
         ).apply {
             setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item)
         }
@@ -2483,19 +2526,19 @@ class MainActivity : Activity() {
         categorySpinner.setSelection(categoryIndex)
 
         val quantityInput = EditText(this).apply {
-            hint = "Quantity"
+            hint = ui("Quantity")
             inputType = InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_FLAG_DECIMAL
             setText(existing?.let { formatQuantity(it.quantity).replace(",", "") } ?: "")
         }
 
         val priceInput = EditText(this).apply {
-            hint = "Current price per unit (Toman)"
+            hint = ui("Current price per unit (Toman)")
             inputType = InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_FLAG_DECIMAL
             setText(existing?.let { it.price.toLong().toString() } ?: "")
         }
 
         val averageCostInput = EditText(this).apply {
-            hint = "Average cost per unit (Toman)"
+            hint = ui("Average cost per unit (Toman)")
             inputType = InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_FLAG_DECIMAL
             setText(existing?.let { it.averageCost.toLong().toString() } ?: "")
         }
@@ -2504,7 +2547,7 @@ class MainActivity : Activity() {
         val priceSourceAdapter = ArrayAdapter(
             this,
             android.R.layout.simple_spinner_item,
-            priceSources
+            priceSources.map(::ui)
         ).apply {
             setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item)
         }
@@ -2514,19 +2557,19 @@ class MainActivity : Activity() {
         priceSourceSpinner.setSelection(sourceIndex)
 
         val symbolInput = EditText(this).apply {
-            hint = "Market symbol (e.g. BTC, ETH, SOL)"
+            hint = ui("Market symbol (e.g. BTC, ETH, SOL)")
             inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_CAP_CHARACTERS
             setText(existing?.symbol ?: "")
         }
 
         val includeTargetCheck = CheckBox(this).apply {
-            text = "Include in target allocation"
+            text = ui("Include in target allocation")
             isChecked = existing?.includeInTarget ?: true
             setPadding(0, dp(6), 0, 0)
         }
 
         val targetInput = EditText(this).apply {
-            hint = "Target allocation (%)"
+            hint = ui("Target allocation (%)")
             inputType = InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_FLAG_DECIMAL
             setText(existing?.let { formatQuantity(it.targetPercent) } ?: "0")
         }
@@ -2545,20 +2588,20 @@ class MainActivity : Activity() {
         val dialog = AlertDialog.Builder(this)
             .setTitle(if (isEditing) "Edit Asset" else "Add Asset")
             .setView(form)
-            .setNegativeButton("Cancel", null)
+            .setNegativeButton(ui("Cancel"), null)
             .setPositiveButton(if (isEditing) "Save" else "Add", null)
             .create()
 
         dialog.setOnShowListener {
             dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
                 val name = nameInput.text.toString().trim()
-                val category = categorySpinner.selectedItem.toString()
+                val category = availableCategories[categorySpinner.selectedItemPosition]
                 val quantity = quantityInput.text.toString().trim().replace(",", "").toDoubleOrNull()
                 val price = priceInput.text.toString().trim().replace(",", "").toDoubleOrNull()
                 val averageCostText = averageCostInput.text.toString().trim().replace(",", "")
                 val averageCost = if (averageCostText.isBlank()) price else averageCostText.toDoubleOrNull()
                 val targetPercent = targetInput.text.toString().trim().replace(",", "").toDoubleOrNull()
-                val priceSource = priceSourceSpinner.selectedItem.toString()
+                val priceSource = priceSources[priceSourceSpinner.selectedItemPosition]
                 val symbol = symbolInput.text.toString().trim().uppercase(Locale.US)
 
                 when {
@@ -2577,16 +2620,19 @@ class MainActivity : Activity() {
                         symbolInput.error = "Nobitex source is currently for Crypto assets"
                     else -> {
                         val assets = loadAssets()
-                        val updated = Asset(
-                            name,
-                            category,
-                            quantity,
-                            price,
-                            averageCost,
-                            targetPercent,
-                            includeTargetCheck.isChecked,
-                            priceSource,
-                            symbol
+                        val updated = (existing ?: Asset(
+                            name, category, quantity, price, averageCost, targetPercent,
+                            includeTargetCheck.isChecked, priceSource, symbol
+                        )).copy(
+                            name = name,
+                            category = category,
+                            quantity = quantity,
+                            price = price,
+                            averageCost = averageCost,
+                            targetPercent = targetPercent,
+                            includeInTarget = includeTargetCheck.isChecked,
+                            priceSource = priceSource,
+                            symbol = symbol
                         )
 
                         if (isEditing && index != null && index in assets.indices) {
@@ -2661,7 +2707,7 @@ class MainActivity : Activity() {
 
         card.addView(
             TextView(this).apply {
-                text = "Quantity: " + formatQuantity(asset.quantity)
+                text = ui("Quantity: ") + formatQuantity(asset.quantity)
                 textSize = 14f
                 setTextColor(Color.DKGRAY)
             }
@@ -2669,7 +2715,7 @@ class MainActivity : Activity() {
 
         card.addView(
             TextView(this).apply {
-                text = "Price: " + formatToman(asset.price)
+                text = ui("Price: ") + formatToman(asset.price)
                 textSize = 14f
                 setTextColor(Color.DKGRAY)
             }
@@ -2677,7 +2723,7 @@ class MainActivity : Activity() {
 
         card.addView(
             TextView(this).apply {
-                text = "Avg. cost: " + formatToman(asset.averageCost)
+                text = ui("Avg. cost: ") + formatToman(asset.averageCost)
                 textSize = 14f
                 setTextColor(Color.DKGRAY)
             }
@@ -2685,7 +2731,7 @@ class MainActivity : Activity() {
 
         card.addView(
             TextView(this).apply {
-                text = "Value: " + formatToman(asset.value)
+                text = ui("Value: ") + formatToman(asset.value)
                 textSize = 16f
                 setTypeface(typeface, Typeface.BOLD)
                 setTextColor(Color.rgb(45, 45, 45))
@@ -2695,7 +2741,7 @@ class MainActivity : Activity() {
 
         card.addView(
             TextView(this).apply {
-                text = "P/L: " + formatSignedToman(asset.profit)
+                text = ui("P/L: ") + formatSignedToman(asset.profit)
                 textSize = 14f
                 setTypeface(typeface, Typeface.BOLD)
                 setTextColor(
@@ -2776,13 +2822,13 @@ class MainActivity : Activity() {
         }
 
         val buyButton = Button(this).apply {
-            text = "Buy"
+            text = ui("Buy")
             isAllCaps = false
             setOnClickListener { showTransactionDialog(index, asset, true) }
         }
 
         val sellButton = Button(this).apply {
-            text = "Sell"
+            text = ui("Sell")
             isAllCaps = false
             setOnClickListener { showTransactionDialog(index, asset, false) }
         }
@@ -2802,7 +2848,7 @@ class MainActivity : Activity() {
 
         if (asset.category == "Cash") {
             val balanceButton = Button(this).apply {
-                text = "Set Final Balance"
+                text = ui("Set Final Balance")
                 isAllCaps = false
                 setOnClickListener { showCashBalanceDialog(index, asset) }
             }
@@ -2819,7 +2865,7 @@ class MainActivity : Activity() {
 
         card.addView(
             TextView(this).apply {
-                text = "Tap name to edit • Long press card to delete"
+                text = ui("Tap name to edit • Long press card to delete")
                 textSize = 12f
                 setTextColor(Color.GRAY)
                 setPadding(0, dp(7), 0, 0)
@@ -2849,12 +2895,12 @@ class MainActivity : Activity() {
         }
 
         val quantityInput = EditText(this).apply {
-            hint = "Quantity"
+            hint = ui("Quantity")
             inputType = InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_FLAG_DECIMAL
         }
 
         val priceInput = EditText(this).apply {
-            hint = "Transaction price per unit (Toman)"
+            hint = ui("Transaction price per unit (Toman)")
             inputType = InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_FLAG_DECIMAL
             setText(asset.price.toLong().toString())
         }
@@ -2865,7 +2911,7 @@ class MainActivity : Activity() {
         val dialog = AlertDialog.Builder(this)
             .setTitle((if (isBuy) "Buy " else "Sell ") + asset.name)
             .setView(form)
-            .setNegativeButton("Cancel", null)
+            .setNegativeButton(ui("Cancel"), null)
             .setPositiveButton(if (isBuy) "Buy" else "Sell", null)
             .create()
 
@@ -2976,7 +3022,7 @@ class MainActivity : Activity() {
 
         container.addView(
             TextView(this).apply {
-                text = "Price Center"
+                text = ui("Price Center")
                 textSize = 28f
                 setTypeface(typeface, Typeface.BOLD)
                 setTextColor(Color.rgb(30, 30, 30))
@@ -2985,7 +3031,7 @@ class MainActivity : Activity() {
 
         container.addView(
             TextView(this).apply {
-                text = "Update all current prices in one place."
+                text = ui("Update all current prices in one place.")
                 textSize = 14f
                 setTextColor(Color.GRAY)
                 setPadding(0, dp(6), 0, dp(16))
@@ -3025,7 +3071,7 @@ class MainActivity : Activity() {
             )
 
             val input = EditText(this).apply {
-                hint = "Current price (Toman)"
+                hint = ui("Current price (Toman)")
                 inputType = InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_FLAG_DECIMAL
                 setText(asset.price.toLong().toString())
             }
@@ -3045,7 +3091,7 @@ class MainActivity : Activity() {
         }
 
         val saveButton = Button(this).apply {
-            text = "Save All Prices"
+            text = ui("Save All Prices")
             isAllCaps = false
             setOnClickListener {
                 val updatedAssets = loadAssets()
@@ -3073,13 +3119,13 @@ class MainActivity : Activity() {
         }
 
         val apiButton = Button(this).apply {
-            text = "Update Nobitex Prices"
+            text = ui("Update Nobitex Prices")
             isAllCaps = false
             setOnClickListener { updateNobitexPrices() }
         }
 
         val backButton = Button(this).apply {
-            text = "Back to Portfolio"
+            text = ui("Back to Portfolio")
             isAllCaps = false
             setOnClickListener { showPortfolioScreen() }
         }
@@ -3140,9 +3186,9 @@ class MainActivity : Activity() {
         if (apiEntries.isEmpty()) {
             if (showResult) {
                 AlertDialog.Builder(this)
-                    .setTitle("Nobitex")
-                    .setMessage("No Crypto assets are configured with Nobitex as their price source.")
-                    .setPositiveButton("OK", null)
+                    .setTitle(ui("Nobitex"))
+                    .setMessage(ui("No Crypto assets are configured with Nobitex as their price source."))
+                    .setPositiveButton(ui("OK"), null)
                     .show()
             }
             return
@@ -3242,13 +3288,30 @@ class MainActivity : Activity() {
                     throw IllegalStateException("No configured Nobitex prices could be updated.")
                 }
 
-                saveAssets(updatedAssets)
-                recordSnapshot(updatedAssets)
-                markPriceUpdate()
-
                 runOnUiThread {
+                    if (isFinishing || isDestroyed) {
+                        priceUpdateInProgress.set(false)
+                        return@runOnUiThread
+                    }
+                    val latestAssets = loadAssets()
+                    if (latestAssets.size != currentAssets.size ||
+                        latestAssets.indices.any { !assetsEquivalent(latestAssets[it], currentAssets[it]) }
+                    ) {
+                        priceUpdateInProgress.set(false)
+                        if (showResult) {
+                            AlertDialog.Builder(this)
+                                .setTitle(ui("Prices Not Applied"))
+                                .setMessage(ui("The portfolio changed while prices were downloading. Try again; no newer edits were overwritten."))
+                                .setPositiveButton(ui("OK"), null)
+                                .show()
+                        }
+                        return@runOnUiThread
+                    }
+                    pushUndoCheckpoint()
+                    saveAssets(updatedAssets)
+                    recordSnapshot(updatedAssets)
+                    markPriceUpdate()
                     priceUpdateInProgress.set(false)
-                    if (isFinishing || isDestroyed) return@runOnUiThread
                     if (showResult) {
                         val message = buildString {
                             append("Updated: ")
@@ -3262,9 +3325,9 @@ class MainActivity : Activity() {
                         }
 
                         AlertDialog.Builder(this)
-                            .setTitle("Nobitex Update")
+                            .setTitle(ui("Nobitex Update"))
                             .setMessage(message)
-                            .setPositiveButton("OK") { _, _ -> showPortfolioScreen() }
+                            .setPositiveButton(ui("OK")) { _, _ -> showPortfolioScreen() }
                             .show()
                     } else if (onPortfolioScreen) {
                         showPortfolioScreen()
@@ -3276,9 +3339,9 @@ class MainActivity : Activity() {
                     if (isFinishing || isDestroyed) return@runOnUiThread
                     if (showResult) {
                         AlertDialog.Builder(this)
-                            .setTitle("Nobitex Update Failed")
+                            .setTitle(ui("Nobitex Update Failed"))
                             .setMessage(error.message ?: "Could not update market prices.")
-                            .setPositiveButton("OK", null)
+                            .setPositiveButton(ui("OK"), null)
                             .show()
                     }
                 }
@@ -3288,18 +3351,18 @@ class MainActivity : Activity() {
 
     private fun showCashBalanceDialog(index: Int, asset: Asset) {
         val input = EditText(this).apply {
-            hint = "Final balance (Toman)"
+            hint = ui("Final balance (Toman)")
             inputType = InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_FLAG_DECIMAL
             setText(asset.value.toLong().toString())
             setPadding(dp(20), dp(8), dp(20), 0)
         }
 
         val dialog = AlertDialog.Builder(this)
-            .setTitle("Set " + asset.name + " Balance")
-            .setMessage("The app will infer the difference as income or expense.")
+            .setTitle(ui("Set ") + asset.name + " Balance")
+            .setMessage(ui("The app will infer the difference as income or expense."))
             .setView(input)
-            .setNegativeButton("Cancel", null)
-            .setPositiveButton("Save", null)
+            .setNegativeButton(ui("Cancel"), null)
+            .setPositiveButton(ui("Save"), null)
             .create()
 
         dialog.setOnShowListener {
@@ -3420,12 +3483,12 @@ class MainActivity : Activity() {
 
         if (!canSafelyRevertTransaction(transaction, transactions, assets)) {
             AlertDialog.Builder(this)
-                .setTitle("Cannot Safely Revert")
+                .setTitle(ui("Cannot Safely Revert"))
                 .setMessage(
-                    "This transaction is not the latest managed change for the asset, " +
+                    ui("This transaction is not the latest managed change for the asset, ") +
                         "or the asset has changed since it was recorded."
                 )
-                .setPositiveButton("OK", null)
+                .setPositiveButton(ui("OK"), null)
                 .show()
             return
         }
@@ -3462,7 +3525,7 @@ class MainActivity : Activity() {
         if (transactions.isEmpty()) {
             content.addView(
                 TextView(this).apply {
-                    text = "No activity yet."
+                    text = ui("No activity yet.")
                     textSize = 14f
                     setTextColor(Color.GRAY)
                 }
@@ -3496,13 +3559,13 @@ class MainActivity : Activity() {
                         isEnabled = canRevert
                         setOnClickListener {
                             AlertDialog.Builder(this@MainActivity)
-                                .setTitle("Revert transaction?")
+                                .setTitle(ui("Revert transaction?"))
                                 .setMessage(
-                                    "This will reverse the portfolio effect of this transaction " +
+                                    ui("This will reverse the portfolio effect of this transaction ") +
                                         "and remove it from Activity."
                                 )
-                                .setNegativeButton("Cancel", null)
-                                .setPositiveButton("Revert") { _, _ ->
+                                .setNegativeButton(ui("Cancel"), null)
+                                .setPositiveButton(ui("Revert")) { _, _ ->
                                     revertTransaction(transaction.id)
                                 }
                                 .show()
@@ -3532,13 +3595,13 @@ class MainActivity : Activity() {
         }
 
         AlertDialog.Builder(this)
-            .setTitle("Activity Manager")
+            .setTitle(ui("Activity Manager"))
             .setView(
                 ScrollView(this).apply {
                     addView(content)
                 }
             )
-            .setPositiveButton("Close", null)
+            .setPositiveButton(ui("Close"), null)
             .show()
     }
 
@@ -3552,7 +3615,7 @@ class MainActivity : Activity() {
         if (snapshots.isEmpty()) {
             content.addView(
                 TextView(this).apply {
-                    text = "No portfolio snapshots yet. Save prices in Price Center to create one."
+                    text = ui("No portfolio snapshots yet. Save prices in Price Center to create one.")
                     textSize = 14f
                     setTextColor(Color.GRAY)
                 }
@@ -3593,13 +3656,13 @@ class MainActivity : Activity() {
         }
 
         AlertDialog.Builder(this)
-            .setTitle("Portfolio History")
+            .setTitle(ui("Portfolio History"))
             .setView(
                 ScrollView(this).apply {
                     addView(content)
                 }
             )
-            .setPositiveButton("Close", null)
+            .setPositiveButton(ui("Close"), null)
             .show()
     }
 
@@ -3734,7 +3797,7 @@ class MainActivity : Activity() {
         }
 
         AlertDialog.Builder(this)
-            .setTitle("Google Drive / Cloud Backup")
+            .setTitle(ui("Google Drive / Cloud Backup"))
             .setMessage(cloudStatusText())
             .setItems(options) { _, which ->
                 if (connected) {
@@ -3767,25 +3830,25 @@ class MainActivity : Activity() {
                     }
                 }
             }
-            .setNegativeButton("Close", null)
+            .setNegativeButton(ui("Close"), null)
             .show()
     }
 
     private fun showCloudFirstConnectDialog() {
         AlertDialog.Builder(this)
-            .setTitle("Connect Google Drive")
+            .setTitle(ui("Connect Google Drive"))
             .setMessage(
-                "Recommended: use the same Investment-shared.json file as Windows.\n\n" +
+                ui("Recommended: use the same Investment-shared.json file as Windows.\n\n") +
                     "On the next screen, open the menu (☰), choose Google Drive, then select " +
                     "Investment-shared.json.\n\nIf the file does not exist yet, choose Create New instead."
             )
-            .setPositiveButton("Choose Existing File") { _, _ ->
+            .setPositiveButton(ui("Choose Existing File")) { _, _ ->
                 connectExistingCloudBackup()
             }
-            .setNeutralButton("Create New") { _, _ ->
+            .setNeutralButton(ui("Create New")) { _, _ ->
                 createCloudBackupFile()
             }
-            .setNegativeButton("Cancel", null)
+            .setNegativeButton(ui("Cancel"), null)
             .show()
     }
 
@@ -3795,7 +3858,7 @@ class MainActivity : Activity() {
         val current = values.indexOf(loadCloudAutoSyncMinutes()).coerceAtLeast(0)
 
         AlertDialog.Builder(this)
-            .setTitle("Smart Sync Interval")
+            .setTitle(ui("Smart Sync Interval"))
             .setSingleChoiceItems(labels, current) { dialog, which ->
                 setCloudAutoSyncMinutes(values[which])
                 dialog.dismiss()
@@ -3808,7 +3871,7 @@ class MainActivity : Activity() {
                     showPortfolioScreen()
                 }
             }
-            .setNegativeButton("Cancel", null)
+            .setNegativeButton(ui("Cancel"), null)
             .show()
     }
 
@@ -3842,12 +3905,12 @@ class MainActivity : Activity() {
             startActivityForResult(intent, connectCloudBackupRequestCode)
         } catch (error: Exception) {
             AlertDialog.Builder(this)
-                .setTitle("File Picker Unavailable")
+                .setTitle(ui("File Picker Unavailable"))
                 .setMessage(
-                    "Android could not open the system file picker. Make sure the Google Drive app " +
+                    ui("Android could not open the system file picker. Make sure the Google Drive app ") +
                         "is installed, signed in, and enabled, then try again."
                 )
-                .setPositiveButton("OK", null)
+                .setPositiveButton(ui("OK"), null)
                 .show()
         }
     }
@@ -3966,7 +4029,20 @@ class MainActivity : Activity() {
         root.put("schemaVersion", PortfolioSafety.SHARED_SCHEMA_VERSION)
         root.put("updatedAt", System.currentTimeMillis())
         root.put("sharedPortfolio", mergedPortfolio)
-        root.put("androidBackup", buildAndroidBackupPayload())
+        val localSupplement = buildAndroidBackupPayload()
+        val remoteSupplement = root.optJSONObject("androidBackup")
+        if (remoteSupplement != null) {
+            for ((key, identity) in listOf("transactions" to "id", "snapshots" to "timestamp")) {
+                localSupplement.put(
+                    key,
+                    PortfolioSafety.mergeHistory(
+                        localSupplement.optJSONArray(key) ?: JSONArray(),
+                        remoteSupplement.optJSONArray(key) ?: JSONArray(),
+                        identity
+                    )
+                )
+        }
+        root.put("androidBackup", localSupplement)
         return root
     }
 
@@ -4169,14 +4245,14 @@ class MainActivity : Activity() {
                     PortfolioSafety.SyncDecision.CONFLICT -> {
                         val changedRows = sharedChangeCount(result.local, result.remote)
                         AlertDialog.Builder(this)
-                            .setTitle("Cloud Sync Conflict")
+                            .setTitle(ui("Cloud Sync Conflict"))
                             .setMessage(
-                                "Smart sync found changes on both Phone and Cloud. " +
+                                ui("Smart sync found changes on both Phone and Cloud. ") +
                                     changedRows + " asset row(s) differ. Nothing was overwritten."
                             )
-                            .setNegativeButton("Later", null)
-                            .setNeutralButton("Use Cloud") { _, _ -> loadFromCloud() }
-                            .setPositiveButton("Use Phone") { _, _ ->
+                            .setNegativeButton(ui("Later"), null)
+                            .setNeutralButton(ui("Use Cloud")) { _, _ -> loadFromCloud() }
+                            .setPositiveButton(ui("Use Phone")) { _, _ ->
                                 syncToCloud(forcePhoneData = true)
                             }
                             .show()
@@ -4196,8 +4272,8 @@ class MainActivity : Activity() {
                 message +
                     "\n\nIf the Google Drive file was moved, removed, or access expired, reconnect it."
             )
-            .setNegativeButton("Close", null)
-            .setPositiveButton("Reconnect") { _, _ ->
+            .setNegativeButton(ui("Close"), null)
+            .setPositiveButton(ui("Reconnect")) { _, _ ->
                 connectExistingCloudBackup()
             }
             .show()
@@ -4265,15 +4341,15 @@ class MainActivity : Activity() {
                     sharedChangeCount(result.local, result.remote)
                 }
                 AlertDialog.Builder(this)
-                    .setTitle("Cloud Status")
+                    .setTitle(ui("Cloud Status"))
                     .setMessage(
                         state +
                             "\n\nPhone: " + sharedPortfolioSummary(result.local) +
                             "\nCloud: " + sharedPortfolioSummary(result.remote) +
                             "\nChanged asset rows: " + changed
                     )
-                    .setNegativeButton("Close", null)
-                    .setPositiveButton("Sync Now") { _, _ -> syncToCloud() }
+                    .setNegativeButton(ui("Close"), null)
+                    .setPositiveButton(ui("Sync Now")) { _, _ -> syncToCloud() }
                     .show()
             },
             onFailure = { error ->
@@ -4393,15 +4469,15 @@ class MainActivity : Activity() {
                             ?: throw IllegalStateException("Cloud comparison data is missing.")
                         val changedRows = sharedChangeCount(local, remote)
                         AlertDialog.Builder(this)
-                            .setTitle("Cloud Sync Conflict")
+                            .setTitle(ui("Cloud Sync Conflict"))
                             .setMessage(
-                                "Both copies may contain changes. " + changedRows +
+                                ui("Both copies may contain changes. ") + changedRows +
                                     " asset row(s) differ. Nothing was overwritten. " +
                                     "Choose which portfolio to keep."
                             )
-                            .setNegativeButton("Cancel", null)
-                            .setNeutralButton("Use Cloud") { _, _ -> loadFromCloud() }
-                            .setPositiveButton("Use Phone") { _, _ ->
+                            .setNegativeButton(ui("Cancel"), null)
+                            .setNeutralButton(ui("Use Cloud")) { _, _ -> loadFromCloud() }
+                            .setPositiveButton(ui("Use Phone")) { _, _ ->
                                 syncToCloud(forcePhoneData = true)
                             }
                             .show()
@@ -4419,13 +4495,13 @@ class MainActivity : Activity() {
 
     private fun confirmLoadFromCloud() {
         AlertDialog.Builder(this)
-            .setTitle("Load from Cloud?")
+            .setTitle(ui("Load from Cloud?"))
             .setMessage(
-                "This will apply the shared portfolio from Cloud. Android history and settings " +
+                ui("This will apply the shared portfolio from Cloud. Android history and settings ") +
                     "are kept when available, and an Undo checkpoint is created first."
             )
-            .setNegativeButton("Cancel", null)
-            .setPositiveButton("Load") { _, _ -> loadFromCloud() }
+            .setNegativeButton(ui("Cancel"), null)
+            .setPositiveButton(ui("Load")) { _, _ -> loadFromCloud() }
             .show()
     }
 
@@ -4492,16 +4568,16 @@ class MainActivity : Activity() {
             arrayOf("Export Backup", "Import Backup")
         }
         AlertDialog.Builder(this)
-            .setTitle("Backup / Restore")
+            .setTitle(ui("Backup / Restore"))
             .setItems(options) { _, which ->
                 when (which) {
                     0 -> exportBackup()
                     1 -> importBackup()
                     2 -> AlertDialog.Builder(this)
-                        .setTitle("Restore Previous Local Data?")
-                        .setMessage("This recovers the local portfolio preserved immediately before the last import or cloud restore.")
-                        .setNegativeButton("Cancel", null)
-                        .setPositiveButton("Restore") { _, _ ->
+                        .setTitle(ui("Restore Previous Local Data?"))
+                        .setMessage(ui("This recovers the local portfolio preserved immediately before the last import or cloud restore."))
+                        .setNegativeButton(ui("Cancel"), null)
+                        .setPositiveButton(ui("Restore")) { _, _ ->
                             try {
                                 pushUndoCheckpoint()
                                 restorePreviousLocalState()
@@ -4509,16 +4585,16 @@ class MainActivity : Activity() {
                                 showPortfolioScreen()
                             } catch (error: Exception) {
                                 AlertDialog.Builder(this)
-                                    .setTitle("Recovery Failed")
+                                    .setTitle(ui("Recovery Failed"))
                                     .setMessage(error.message ?: "Could not restore previous local data.")
-                                    .setPositiveButton("OK", null)
+                                    .setPositiveButton(ui("OK"), null)
                                     .show()
                             }
                         }
                         .show()
                 }
             }
-            .setNegativeButton("Cancel", null)
+            .setNegativeButton(ui("Cancel"), null)
             .show()
     }
 
@@ -4762,8 +4838,7 @@ class MainActivity : Activity() {
 
     private fun snapshotsWithCurrentTotal(source: JSONArray, assets: List<Asset>): JSONArray {
         val result = JSONArray()
-        val start = (source.length() - 99).coerceAtLeast(0)
-        for (index in start until source.length()) {
+        for (index in 0 until source.length()) {
             result.put(source.get(index))
         }
         result.put(
@@ -4981,15 +5056,15 @@ class MainActivity : Activity() {
                         onSuccess = {
                             saveCloudBackupUri(uri)
                             AlertDialog.Builder(this)
-                                .setTitle("Cloud Backup Connected")
+                                .setTitle(ui("Cloud Backup Connected"))
                                 .setMessage(
-                                    "The file is valid and connected. Load its data now or keep this phone's data? " +
+                                    ui("The file is valid and connected. Load its data now or keep this phone's data? ") +
                                         "Nothing will be overwritten until you choose."
                                 )
-                                .setNegativeButton("Keep Phone Data") { _, _ ->
+                                .setNegativeButton(ui("Keep Phone Data")) { _, _ ->
                                     syncToCloud(forcePhoneData = true)
                                 }
-                                .setPositiveButton("Load Cloud Data") { _, _ -> loadFromCloud() }
+                                .setPositiveButton(ui("Load Cloud Data")) { _, _ -> loadFromCloud() }
                                 .show()
                         },
                         onFailure = { error ->
@@ -5003,18 +5078,18 @@ class MainActivity : Activity() {
             }
         } catch (error: Exception) {
             AlertDialog.Builder(this)
-                .setTitle("Backup Error")
+                .setTitle(ui("Backup Error"))
                 .setMessage(error.message ?: "Could not process the backup file.")
-                .setPositiveButton("OK", null)
+                .setPositiveButton(ui("OK"), null)
                 .show()
         }
     }
 
     private fun showBackupFileError(error: Exception) {
         AlertDialog.Builder(this)
-            .setTitle("Backup Error")
+            .setTitle(ui("Backup Error"))
             .setMessage(error.message ?: "Could not process the backup file. Local data was not changed.")
-            .setPositiveButton("OK", null)
+            .setPositiveButton(ui("OK"), null)
             .show()
     }
 
@@ -5023,7 +5098,7 @@ class MainActivity : Activity() {
 
         parent.addView(
             TextView(this).apply {
-                text = "Recent Activity"
+                text = ui("Recent Activity")
                 textSize = 21f
                 setTypeface(typeface, Typeface.BOLD)
                 setTextColor(Color.rgb(35, 35, 35))
@@ -5034,7 +5109,7 @@ class MainActivity : Activity() {
         if (transactions.isEmpty()) {
             parent.addView(
                 TextView(this).apply {
-                    text = "No buy or sell transactions yet."
+                    text = ui("No buy or sell transactions yet.")
                     textSize = 14f
                     setTextColor(Color.GRAY)
                     setPadding(0, 0, 0, dp(12))
@@ -5070,10 +5145,10 @@ class MainActivity : Activity() {
 
     private fun confirmDeleteAsset(index: Int, asset: Asset) {
         AlertDialog.Builder(this)
-            .setTitle("Delete " + asset.name + "?")
-            .setMessage("This removes the asset from your portfolio. You can undo it afterward.")
-            .setNegativeButton("Cancel", null)
-            .setPositiveButton("Delete") { _, _ ->
+            .setTitle(ui("Delete ") + asset.name + "?")
+            .setMessage(ui("This removes the asset from your portfolio. You can undo it afterward."))
+            .setNegativeButton(ui("Cancel"), null)
+            .setPositiveButton(ui("Delete")) { _, _ ->
                 val assets = loadAssets()
                 if (index in assets.indices) {
                     pushUndoCheckpoint()

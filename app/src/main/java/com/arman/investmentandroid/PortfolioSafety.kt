@@ -98,8 +98,11 @@ object PortfolioSafety {
                 "category",
                 "Asset ${index + 1} has no category."
             )
-            requiredFiniteNumber(item, "quantity", 0.0, Double.MAX_VALUE)
-            requiredFiniteNumber(item, "price_toman", 0.0, Double.MAX_VALUE)
+            val quantity = requiredFiniteNumber(item, "quantity", 0.0, Double.MAX_VALUE)
+            val price = requiredFiniteNumber(item, "price_toman", 0.0, Double.MAX_VALUE)
+            require((quantity * price).isFinite()) {
+                "Asset ${index + 1} has a value outside the supported range."
+            }
             optionalFiniteNumber(item, "average_cost_toman", 0.0, Double.MAX_VALUE)
             optionalFiniteNumber(item, "target_percent", 0.0, 100.0)
             optionalBoolean(item, "include_in_target")

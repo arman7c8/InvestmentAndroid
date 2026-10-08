@@ -9,8 +9,8 @@ format compatible with existing Investment portfolio files.
 The [Build Android APK workflow](../../actions/workflows/build-apk.yml) tests, lints,
 builds, and verifies the debug APK on each `codex/**` branch push and pull request.
 Open the successful run for the latest source commit and download its
-`InvestmentAndroid-0.31.0-debug-<commit>` artifact. Unzip it and install
-`InvestmentAndroid-0.31.0-debug.apk` on Android 8 or later. The artifact includes
+`InvestmentAndroid-0.32.0-debug-<commit>` artifact. Unzip it and install
+`InvestmentAndroid-0.32.0-debug.apk` on Android 8 or later. The artifact includes
 `SOURCE-COMMIT.txt` and `SHA256SUMS.txt` for verification.
 
 This is a debug-signed test build. An existing installation with another signing

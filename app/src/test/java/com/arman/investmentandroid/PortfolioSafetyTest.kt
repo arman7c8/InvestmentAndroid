@@ -82,6 +82,16 @@ class PortfolioSafetyTest {
     }
 
     @Test
+    fun overflowingAssetValueIsRejected() {
+        val invalid = asset(quantity = Double.MAX_VALUE, price = 10.0)
+        assertThrows(IllegalArgumentException::class.java) {
+            PortfolioSafety.validateBackup(
+                sharedDocument(assets = JSONArray().put(invalid)).toString()
+            )
+        }
+    }
+
+    @Test
     fun duplicateSharedIdentityIsRejected() {
         val assets = JSONArray()
             .put(asset())
@@ -182,5 +192,16 @@ class PortfolioSafetyTest {
 
         assertEquals(1, merged.length())
         assertEquals(2L, merged.getJSONObject(0).getLong("timestamp"))
+    }
+
+    @Test
+    fun cloudRestorePreservesHistoryBeyondOneHundredRows() {
+        val local = JSONArray()
+        for (index in 0 until 250) {
+            local.put(JSONObject().put("id", "local-$index").put("timestamp", index))
+        }
+        val remote = JSONArray().put(JSONObject().put("id", "remote").put("timestamp", 300))
+
+        assertEquals(251, PortfolioSafety.mergeHistory(local, remote, "id").length())
     }
 }
