@@ -4,6 +4,21 @@ package com.arman.investmentandroid
 object UiText {
     private val fa = mapOf(
         "Investment Android" to "سرمایه‌گذاری اندروید",
+        "Prepare target request" to "تهیه درخواست تغییر اهداف",
+        "Prepare Windows target change request" to "تهیه درخواست تغییر اهداف ویندوز",
+        "Export request (not applied)" to "خروجی درخواست (بدون اعمال تغییر)",
+        "Target request only. No changes are applied until Windows validates and confirms." to
+            "این فقط درخواست تغییر است. تا بررسی و تأیید ویندوز، هیچ تغییری اعمال نمی‌شود.",
+        "Category target (%)" to "هدف دسته (%)",
+        "Asset target in category (%)" to "هدف دارایی در دسته (%)",
+        "Global tolerance (%)" to "حد تحمل کلی (%)",
+        "Cash reserve target (Toman)" to "هدف ذخیره نقدی (تومان)",
+        "Invalid target request." to "درخواست تغییر اهداف نامعتبر است.",
+        "No target request to export." to "درخواستی برای ذخیره وجود ندارد.",
+        "Saving target change request" to "در حال ذخیره درخواست تغییر اهداف",
+        "Target request saved. No investment data changed." to
+            "درخواست تغییر ذخیره شد. هیچ اطلاعات سرمایه‌گذاری تغییر نکرد.",
+
         "View Windows Core Snapshot (Read-only)" to "پیش‌نمایش فقط‌خواندنی دادهٔ ویندوز",
         "Windows Core Preview (Read-only)" to "پیش‌نمایش فقط‌خواندنی ویندوز",
         "Inspecting Windows Core snapshot" to "در حال بررسی نسخهٔ ویندوز",
