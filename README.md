@@ -27,6 +27,10 @@ its local portfolio if cloud access fails. An invalid, empty, unsupported, or
 malformed connected file is rejected before sync changes local data or uploads.
 Before importing or loading a valid backup, the app retains a local recovery copy
 under **Backup / Restore → Restore Previous Local Data**.
+Before updating an existing connected cloud file, it also saves the previous
+valid cloud document privately on the phone. **Recover Previous Cloud File**
+can restore it when the connected file is invalid. Document-provider writes
+are not atomic, so an interrupted write may require this explicit recovery.
 
 The cloud flow compares the shared portfolio against the last successful baseline.
 It asks the user to choose when both copies changed, and Smart Sync respects its
@@ -39,5 +43,6 @@ and snapshot history with the phone's history.
 CI runs `:app:testDebugUnitTest :app:lintDebug :app:assembleDebug` and checks the
 APK package ID and version. Phone testing is still needed for the document
 provider account flow, install/update signature behavior, keyboard and scrolling,
-and Persian/English display. Interface labels are currently English; the app
-enables Android RTL layout support but does not include a Persian translation.
+and Persian/English display. Settings has an English/Persian switch and RTL
+support. Translation is still incomplete in detailed status, transaction,
+and error messages.

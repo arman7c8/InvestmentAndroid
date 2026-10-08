@@ -12,6 +12,7 @@ import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.text.InputType
+import android.util.AtomicFile
 import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
@@ -28,6 +29,7 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.net.HttpURLConnection
 import java.net.URL
+import java.io.File
 import java.text.NumberFormat
 import java.text.SimpleDateFormat
 import java.security.MessageDigest
@@ -106,6 +108,7 @@ class MainActivity : Activity() {
     private val cloudAutoSyncMinutesKey = "cloud_auto_sync_minutes"
     private val cloudLastAutoCheckKey = "cloud_last_auto_check"
     private val preRestoreBackupKey = "pre_restore_backup_json"
+    private val cloudPreWriteFileName = "cloud_prewrite_recovery.json"
     private val uiLanguageKey = "ui_language"
     private val exportBackupRequestCode = 1001
     private val importBackupRequestCode = 1002
@@ -1342,7 +1345,7 @@ class MainActivity : Activity() {
         }
 
         val toleranceButton = Button(this).apply {
-            text = String.format(Locale.US, "Tolerance: ±%.1f%%", tolerance)
+            text = String.format(Locale.US, ui("Tolerance: ±%.1f%%"), tolerance)
             isAllCaps = false
             textSize = 16f
             setOnClickListener { showToleranceDialog() }
@@ -1577,12 +1580,12 @@ class MainActivity : Activity() {
         textBlock.addView(
             TextView(this).apply {
                 text = buildString {
-                    append(localCloudSyncState())
+                    append(ui(localCloudSyncState()))
                     append(
                         if (isCloudAutoSyncEnabled()) {
-                            " • Smart sync " + loadCloudAutoSyncMinutes() + "m"
+                            ui(" • Smart sync ") + loadCloudAutoSyncMinutes() + ui("m")
                         } else {
-                            " • Smart sync off"
+                            ui(" • Smart sync off")
                         }
                     )
                     if (lastSync > 0L) {
@@ -1608,7 +1611,7 @@ class MainActivity : Activity() {
 
         headerRow.addView(
             Button(this).apply {
-                text = if (connected) "Sync Now" else "Connect"
+                text = ui(if (connected) "Sync Now" else "Connect")
                 isAllCaps = false
                 textSize = 13f
                 setOnClickListener {
@@ -1736,9 +1739,9 @@ class MainActivity : Activity() {
         card.addView(
             TextView(this).apply {
                 text = if (lastPriceUpdate > 0L) {
-                    "Prices updated: " + formatDate(lastPriceUpdate)
+                    ui("Prices updated: ") + formatDate(lastPriceUpdate)
                 } else {
-                    "Prices have not been updated yet."
+                    ui("Prices have not been updated yet.")
                 }
                 textSize = 12f
                 setTextColor(Color.GRAY)
@@ -1750,11 +1753,11 @@ class MainActivity : Activity() {
                 text = when {
                     !targetValid -> String.format(
                         Locale.US,
-                        "Portfolio Health: Fix targets (total %.1f%%)",
+                        ui("Portfolio Health: Fix targets (total %.1f%%)"),
                         totalTarget
                     )
-                    needAttention == 0 -> "Portfolio Health: On target"
-                    else -> "Portfolio Health: " + needAttention + " asset(s) need attention"
+                    needAttention == 0 -> ui("Portfolio Health: On target")
+                    else -> ui("Portfolio Health: ") + needAttention + ui(" asset(s) need attention")
                 }
                 textSize = 14f
                 setTypeface(typeface, Typeface.BOLD)
@@ -1811,7 +1814,7 @@ class MainActivity : Activity() {
                         text = String.format(
                             Locale.US,
                             "%s  •  %.1f%%  •  %s",
-                            category,
+                            ui(category),
                             allocation,
                             formatToman(value)
                         )
@@ -1866,7 +1869,7 @@ class MainActivity : Activity() {
                     text = String.format(
                         Locale.US,
                         "%s  •  %.1f%%  •  %s",
-                        category,
+                        ui(category),
                         categoryAllocation,
                         formatToman(categoryValue)
                     )
@@ -1921,7 +1924,7 @@ class MainActivity : Activity() {
 
         AlertDialog.Builder(this)
             .setTitle(ui("Portfolio Tools"))
-            .setItems(options) { _, which ->
+            .setItems(options.map(::ui).toTypedArray()) { _, which ->
                 when (which) {
                     0 -> sharePrivacySafeAiSummary()
                     1 -> showCloudBackupDialog()
@@ -1980,7 +1983,7 @@ class MainActivity : Activity() {
 
         parent.addView(
             TextView(this).apply {
-                text = period + " Summary"
+                text = ui(period) + ui(" Summary")
                 textSize = 19f
                 setTypeface(typeface, Typeface.BOLD)
                 setTextColor(Color.rgb(35, 35, 35))
@@ -1991,15 +1994,15 @@ class MainActivity : Activity() {
         parent.addView(
             TextView(this).apply {
                 text = buildString {
-                    append("Buy: ")
+                    append(ui("Buy: "))
                     append(formatToman(buyTotal))
-                    append("  •  Sell: ")
+                    append(ui("  •  Sell: "))
                     append(formatToman(sellTotal))
-                    append("\nRealized P/L: ")
+                    append(ui("\nRealized P/L: "))
                     append(formatSignedToman(realizedProfit))
-                    append("\nIncome: ")
+                    append(ui("\nIncome: "))
                     append(formatToman(income))
-                    append("  •  Expense: ")
+                    append(ui("  •  Expense: "))
                     append(formatToman(expense))
                 }
                 textSize = 13f
@@ -2474,9 +2477,9 @@ class MainActivity : Activity() {
             parent.addView(
                 TextView(this).apply {
                     text = if (amount > 0.0) {
-                        "Buy " + name + " • " + formatToman(amount)
+                        ui("Buy") + " " + name + " • " + formatToman(amount)
                     } else {
-                        "Sell " + name + " • " + formatToman(kotlin.math.abs(amount))
+                        ui("Sell") + " " + name + " • " + formatToman(kotlin.math.abs(amount))
                     }
                     textSize = 14f
                     setTypeface(typeface, Typeface.BOLD)
@@ -2759,13 +2762,13 @@ class MainActivity : Activity() {
                 text = if (asset.includeInTarget) {
                     String.format(
                         Locale.US,
-                        "Portfolio: %.1f%%  •  Target pool: %.1f%%  •  Target: %.1f%%",
+                        ui("Portfolio: %.1f%%  •  Target pool: %.1f%%  •  Target: %.1f%%"),
                         allocation,
                         targetAllocation,
                         asset.targetPercent
                     )
                 } else {
-                    String.format(Locale.US, "Portfolio: %.1f%%  •  Target: Excluded", allocation)
+                    String.format(Locale.US, ui("Portfolio: %.1f%%  •  Target: Excluded"), allocation)
                 }
                 textSize = 14f
                 setTextColor(Color.GRAY)
@@ -2777,9 +2780,9 @@ class MainActivity : Activity() {
         card.addView(
             TextView(this).apply {
                 text = if (asset.includeInTarget) {
-                    String.format(Locale.US, "Distance to target: %+.1f%%", gap)
+                    String.format(Locale.US, ui("Distance to target: %+.1f%%"), gap)
                 } else {
-                    "Distance to target: Not applicable"
+                    ui("Distance to target: Not applicable")
                 }
                 textSize = 13f
                 setTextColor(
@@ -3754,23 +3757,23 @@ class MainActivity : Activity() {
 
         return buildString {
             if (connected) {
-                append("Cloud file connected.")
-                append("\nSmart sync: ")
+                append(ui("Cloud file connected."))
+                append(ui("\nSmart sync: "))
                 append(
                     if (isCloudAutoSyncEnabled()) {
-                        "On • every " + loadCloudAutoSyncMinutes() + " min while app is open"
+                        ui("On • every ") + loadCloudAutoSyncMinutes() + ui(" min while app is open")
                     } else {
-                        "Off"
+                        ui("Off")
                     }
                 )
                 if (lastSync > 0L) {
-                    append("\nLast sync: ")
+                    append(ui("\nLast sync: "))
                     append(formatDate(lastSync))
                 }
             } else {
-                append("Cloud is not connected yet.")
-                append("\nChoose the existing Investment-shared.json from Google Drive,")
-                append(" or create it there if this is your first device.")
+                append(ui("Cloud is not connected yet."))
+                append(ui("\nChoose the existing Investment-shared.json from Google Drive,"))
+                append(ui(" or create it there if this is your first device."))
             }
         }
     }
@@ -3785,7 +3788,8 @@ class MainActivity : Activity() {
                 if (isCloudAutoSyncEnabled()) "Turn Smart Sync Off" else "Turn Smart Sync On",
                 "Smart Sync Interval",
                 "Choose Different Cloud File",
-                "Disconnect Cloud File"
+                "Disconnect Cloud File",
+                "Recover Previous Cloud File"
             )
         } else {
             emptyArray()
@@ -3827,6 +3831,7 @@ class MainActivity : Activity() {
                             stopSmartCloudSync()
                             Toast.makeText(this, "Cloud backup disconnected.", Toast.LENGTH_SHORT).show()
                         }
+                        7 -> recoverPreviousCloudFile()
                     }
                 }
             }
@@ -4185,6 +4190,64 @@ class MainActivity : Activity() {
         }
     }
 
+    private fun preserveCloudBeforeWrite(uri: android.net.Uri, raw: String) {
+        PortfolioSafety.validateBackup(raw).also {
+            require(it.kind == PortfolioSafety.BackupKind.SHARED)
+        }
+        val file = AtomicFile(File(filesDir, cloudPreWriteFileName))
+        val payload = JSONObject().put("uri", uri.toString()).put("raw", raw)
+            .toString().toByteArray(Charsets.UTF_8)
+        val stream = file.startWrite()
+        try {
+            stream.write(payload)
+            file.finishWrite(stream)
+        } catch (error: Exception) {
+            file.failWrite(stream)
+            throw error
+        }
+    }
+
+    private fun recoverPreviousCloudFile() {
+        val uri = loadCloudBackupUri() ?: return
+        AlertDialog.Builder(this)
+            .setTitle(ui("Recover Previous Cloud File"))
+            .setMessage(ui("Recover only if the connected cloud file is damaged. A valid cloud file will not be replaced."))
+            .setNegativeButton(ui("Cancel"), null)
+            .setPositiveButton(ui("Recover")) { _, _ ->
+                runStorageOperation(
+                    label = "Recovering cloud file",
+                    task = {
+                        val file = AtomicFile(File(filesDir, cloudPreWriteFileName))
+                        val saved = JSONObject(file.openRead().bufferedReader().use { it.readText() })
+                        require(saved.optString("uri") == uri.toString()) {
+                            "Recovery copy belongs to another cloud file."
+                        }
+                        val raw = saved.getString("raw")
+                        PortfolioSafety.validateBackup(raw).also {
+                            require(it.kind == PortfolioSafety.BackupKind.SHARED)
+                        }
+                        val current = readUriText(uri)
+                        val currentValid = try {
+                            PortfolioSafety.validateBackup(current).kind == PortfolioSafety.BackupKind.SHARED
+                        } catch (_: Exception) {
+                            false
+                        }
+                        require(!currentValid) {
+                            "Connected cloud file is valid; recovery did not overwrite it."
+                        }
+                        writeUriText(uri, raw)
+                        check(readUriText(uri) == raw) { "Cloud provider did not confirm the restored file." }
+                        Unit
+                    },
+                    onSuccess = {
+                        Toast.makeText(this, ui("Previous cloud file recovered."), Toast.LENGTH_LONG).show()
+                    },
+                    onFailure = { showCloudAccessError("Cloud Recovery Failed", it.message ?: "Recovery failed.") }
+                )
+            }
+            .show()
+    }
+
     private data class SmartSyncResult(
         val raw: String,
         val remote: JSONObject,
@@ -4436,6 +4499,7 @@ class MainActivity : Activity() {
                 }
 
                 val document = mergedBackupDocument(existingRaw)
+                preserveCloudBeforeWrite(uri, existingRaw)
                 writeUriText(uri, document.toString(2))
                 CloudSyncResult(
                     action = CloudSyncAction.UPLOADED,
