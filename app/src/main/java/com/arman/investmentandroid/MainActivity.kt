@@ -112,6 +112,7 @@ class MainActivity : Activity() {
     private val uiLanguageKey = "ui_language"
     private val exportBackupRequestCode = 1001
     private val importBackupRequestCode = 1002
+    private val corePreviewRequestCode = 1005
     private val createCloudBackupRequestCode = 1003
     private val connectCloudBackupRequestCode = 1004
     private val coreCategories = listOf("Cash", "Gold", "Stocks", "Crypto", "Fund", "Other")
@@ -4707,9 +4708,9 @@ class MainActivity : Activity() {
         val hasRecovery = getSharedPreferences(prefsName, MODE_PRIVATE)
             .contains(preRestoreBackupKey)
         val options = if (hasRecovery) {
-            arrayOf("Export Backup", "Import Backup", "Restore Previous Local Data")
+            arrayOf("Export Backup", "Import Backup", "Restore Previous Local Data", "View Windows Core Snapshot (Read-only)")
         } else {
-            arrayOf("Export Backup", "Import Backup")
+            arrayOf("Export Backup", "Import Backup", "View Windows Core Snapshot (Read-only)")
         }.map(::ui).toTypedArray()
         AlertDialog.Builder(this)
             .setTitle(ui("Backup / Restore"))
@@ -4717,7 +4718,7 @@ class MainActivity : Activity() {
                 when (which) {
                     0 -> exportBackup()
                     1 -> importBackup()
-                    2 -> AlertDialog.Builder(this)
+                    2 -> if (!hasRecovery) previewWindowsCoreSnapshot() else AlertDialog.Builder(this)
                         .setTitle(ui("Restore Previous Local Data?"))
                         .setMessage(ui("This recovers the local portfolio preserved immediately before the last import or cloud restore."))
                         .setNegativeButton(ui("Cancel"), null)
@@ -4736,10 +4737,19 @@ class MainActivity : Activity() {
                             }
                         }
                         .show()
+                    3 -> previewWindowsCoreSnapshot()
                 }
             }
             .setNegativeButton(ui("Cancel"), null)
             .show()
+    }
+
+    private fun previewWindowsCoreSnapshot() {
+        val intent = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
+            addCategory(Intent.CATEGORY_OPENABLE)
+            type = "application/json"
+        }
+        startActivityForResult(intent, corePreviewRequestCode)
     }
 
     private fun exportBackup() {
@@ -5125,6 +5135,29 @@ class MainActivity : Activity() {
 
         try {
             when (requestCode) {
+                corePreviewRequestCode -> {
+                    runStorageOperation(
+                        label = "Inspecting Windows Core snapshot",
+                        task = { CoreSnapshotPreview.inspect(readUriText(uri)) },
+                        onSuccess = { summary ->
+                            val scroll = ScrollView(this).apply {
+                                addView(TextView(this@MainActivity).apply {
+                                    text = summary.display(uiLanguage() == "fa")
+                                    textSize = 14f
+                                    setPadding(dp(16), dp(12), dp(16), dp(12))
+                                    textDirection = View.TEXT_DIRECTION_FIRST_STRONG
+                                    setTextIsSelectable(true)
+                                })
+                            }
+                            AlertDialog.Builder(this)
+                                .setTitle(ui("Windows Core Preview (Read-only)"))
+                                .setView(scroll)
+                                .setPositiveButton(ui("Close"), null)
+                                .show()
+                        },
+                        onFailure = { error -> showBackupFileError(error) }
+                    )
+                }
                 exportBackupRequestCode -> {
                     runStorageOperation(
                         label = "Exporting backup",
