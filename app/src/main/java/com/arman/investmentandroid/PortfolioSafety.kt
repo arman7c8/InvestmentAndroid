@@ -142,6 +142,25 @@ object PortfolioSafety {
         else -> SyncDecision.CONFLICT
     }
 
+    /** Keep phone history when a shared cloud file contains an older Android supplement. */
+    fun mergeHistory(local: JSONArray, remote: JSONArray, identityKey: String): JSONArray {
+        val byIdentity = linkedMapOf<String, JSONObject>()
+        fun addAll(array: JSONArray) {
+            for (index in 0 until array.length()) {
+                val item = array.getJSONObject(index)
+                val identity = item.optString(identityKey, "").ifBlank { item.toString() }
+                byIdentity[identity] = item
+            }
+        }
+        addAll(remote)
+        addAll(local)
+        val merged = JSONArray()
+        byIdentity.values.sortedBy { it.optLong("timestamp", 0L) }
+            .takeLast(100)
+            .forEach { merged.put(it) }
+        return merged
+    }
+
     private fun validateLegacyAndroidBackup(root: JSONObject): ValidatedBackup {
         if (root.has("format") && root.optString("format").isNotBlank()) {
             throw IllegalArgumentException("Unsupported backup format. Local data was not changed.")

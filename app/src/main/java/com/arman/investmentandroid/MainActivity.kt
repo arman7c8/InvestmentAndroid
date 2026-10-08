@@ -4311,16 +4311,12 @@ class MainActivity : Activity() {
             label = "Syncing safely",
             task = {
                 val existingRaw = readUriText(uri)
-                val validated = if (existingRaw.isBlank()) {
-                    null
-                } else {
-                    PortfolioSafety.validateBackup(existingRaw).also {
-                        require(it.kind == PortfolioSafety.BackupKind.SHARED) {
-                            "Cloud file is not a shared portfolio. No data was overwritten."
-                        }
+                val validated = PortfolioSafety.validateBackup(existingRaw).also {
+                    require(it.kind == PortfolioSafety.BackupKind.SHARED) {
+                        "Cloud file is not a shared portfolio. No data was overwritten."
                     }
                 }
-                val remoteShared = validated?.sharedPortfolio
+                val remoteShared = validated.sharedPortfolio
                 val localShared = buildSharedPortfolio()
                 if (remoteShared != null) {
                     PortfolioSafety.ensureSafeReplacement(
@@ -4474,7 +4470,7 @@ class MainActivity : Activity() {
             require(validated.kind == PortfolioSafety.BackupKind.SHARED) {
                 "Connected cloud file is not a shared portfolio."
             }
-            restoreBackupJson(raw)
+            restoreBackupJson(raw, mergeLocalHistory = true)
             validated.sharedPortfolio?.let(::saveCloudBaseline)
             markCloudSync()
             Toast.makeText(this, "Cloud backup loaded safely.", Toast.LENGTH_SHORT).show()
@@ -4779,7 +4775,10 @@ class MainActivity : Activity() {
         return result
     }
 
-    private fun applySharedBackup(validated: PortfolioSafety.ValidatedBackup) {
+    private fun applySharedBackup(
+        validated: PortfolioSafety.ValidatedBackup,
+        mergeLocalHistory: Boolean = false
+    ) {
         val portfolio = validated.sharedPortfolio
             ?: throw IllegalArgumentException("Shared portfolio payload is missing.")
         PortfolioSafety.ensureSafeReplacement(loadAssets().size, validated.incomingAssetCount)
@@ -4787,10 +4786,20 @@ class MainActivity : Activity() {
         val supplemental = validated.androidPayload
         val plan = buildSharedImportPlan(portfolio, supplemental)
         val prefs = getSharedPreferences(prefsName, MODE_PRIVATE)
-        val transactions = supplemental?.optJSONArray("transactions")
-            ?: JSONArray(prefs.getString(transactionsKey, "[]") ?: "[]")
-        val sourceSnapshots = supplemental?.optJSONArray("snapshots")
-            ?: JSONArray(prefs.getString(snapshotsKey, "[]") ?: "[]")
+        val localTransactions = JSONArray(prefs.getString(transactionsKey, "[]") ?: "[]")
+        val remoteTransactions = supplemental?.optJSONArray("transactions") ?: JSONArray()
+        val transactions = if (mergeLocalHistory) {
+            PortfolioSafety.mergeHistory(localTransactions, remoteTransactions, "id")
+        } else {
+            supplemental?.optJSONArray("transactions") ?: localTransactions
+        }
+        val localSnapshots = JSONArray(prefs.getString(snapshotsKey, "[]") ?: "[]")
+        val remoteSnapshots = supplemental?.optJSONArray("snapshots") ?: JSONArray()
+        val sourceSnapshots = if (mergeLocalHistory) {
+            PortfolioSafety.mergeHistory(localSnapshots, remoteSnapshots, "timestamp")
+        } else {
+            supplemental?.optJSONArray("snapshots") ?: localSnapshots
+        }
         val displayUnit = supplemental?.optString("displayUnit", loadDisplayUnit())
             ?: loadDisplayUnit()
         val summaryPeriod = supplemental?.optString("summaryPeriod", loadSummaryPeriod())
@@ -4858,10 +4867,10 @@ class MainActivity : Activity() {
         }.toString(2)
     }
 
-    private fun restoreBackupJson(raw: String) {
+    private fun restoreBackupJson(raw: String, mergeLocalHistory: Boolean = false) {
         val validated = PortfolioSafety.validateBackup(raw)
         when (validated.kind) {
-            PortfolioSafety.BackupKind.SHARED -> applySharedBackup(validated)
+            PortfolioSafety.BackupKind.SHARED -> applySharedBackup(validated, mergeLocalHistory)
             PortfolioSafety.BackupKind.LEGACY_ANDROID -> applyLegacyAndroidBackup(validated)
         }
     }

@@ -162,4 +162,25 @@ class PortfolioSafetyTest {
             PortfolioSafety.decideSync("local", "remote", null)
         )
     }
+
+    @Test
+    fun cloudRestoreKeepsLocalTransactionsMissingFromOlderCloudSupplement() {
+        val remote = JSONArray().put(JSONObject().put("id", "old").put("timestamp", 1L))
+        val local = JSONArray().put(JSONObject().put("id", "new").put("timestamp", 2L))
+        val merged = PortfolioSafety.mergeHistory(local, remote, "id")
+
+        assertEquals(2, merged.length())
+        assertEquals("old", merged.getJSONObject(0).getString("id"))
+        assertEquals("new", merged.getJSONObject(1).getString("id"))
+    }
+
+    @Test
+    fun cloudRestorePrefersPhoneCopyForMatchingTransactionId() {
+        val remote = JSONArray().put(JSONObject().put("id", "same").put("timestamp", 1L))
+        val local = JSONArray().put(JSONObject().put("id", "same").put("timestamp", 2L))
+        val merged = PortfolioSafety.mergeHistory(local, remote, "id")
+
+        assertEquals(1, merged.length())
+        assertEquals(2L, merged.getJSONObject(0).getLong("timestamp"))
+    }
 }
