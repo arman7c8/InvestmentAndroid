@@ -6,10 +6,15 @@ import java.util.Base64
 
 /** Read-only verifier; cannot mutate Android data or its cloud destination. */
 object CoreSnapshotPreview {
+    data class AssetPosition(val id: String, val name: String, val quantity: Double)
+    data class CashPosition(val id: String, val balanceToman: Double)
+
     data class Summary(val schema: Int, val tableCount: Int, val holdings: List<String>,
         val accounts: List<String>, val transactions: Int, val corrections: Int,
         val revisions: Int, val voids: Int, val sha: String,
-        val policy: CorePolicyParity.Summary? = null) {
+        val policy: CorePolicyParity.Summary? = null,
+        val positions: List<AssetPosition> = emptyList(),
+        val cashBalances: List<CashPosition> = emptyList()) {
         fun display(fa: Boolean): String {
             val lines = mutableListOf<String>()
             lines.add(if (fa) "فقط پیش‌نمایش؛ هیچ داده‌ای وارد یا همگام نمی‌شود." else
@@ -121,6 +126,18 @@ object CoreSnapshotPreview {
         val policy = if (contractVersion == 2) {
             CorePolicyParity.inspect(tables, preview.getJSONObject("policy"))
         } else null
-        return Summary(schema, count, holdings, accounts, tx, corrections, revisions, voids, sha, policy)
+        // The immutable, independently verified source preview supplies stable
+        // Core IDs and quantities to the offline financial request editor.
+        val positions = (0 until assets.length()).map { index ->
+            val item = assets.getJSONObject(index)
+            AssetPosition(item.getString("id"), item.getString("name"),
+                item.getDouble("quantity"))
+        }
+        val balances = (0 until accountRows.length()).map { index ->
+            val item = accountRows.getJSONObject(index)
+            CashPosition(item.getString("id"), item.getDouble("balance_toman"))
+        }
+        return Summary(schema, count, holdings, accounts, tx, corrections, revisions,
+            voids, sha, policy, positions, balances)
     }
 }
