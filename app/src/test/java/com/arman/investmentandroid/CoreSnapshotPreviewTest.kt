@@ -90,6 +90,59 @@ class CoreSnapshotPreviewTest {
         }
     }
 
+    @Test fun tradeAndCorrectionWithVoidedSaleRecomputeToWindowsTotals() {
+        val envelope = sample()
+        val body = JSONObject(String(Base64.getDecoder().decode(envelope.getString("payloadBase64"))))
+        val tables = body.getJSONObject("tables")
+        tables.getJSONObject("transactions")
+            .put("columns", JSONArray().put("id").put("type").put("amount_toman")
+                .put("asset_id").put("quantity").put("source").put("destination"))
+            .put("rowids", JSONArray().put(1).put(2))
+            .put("rows", JSONArray()
+                .put(JSONArray().put("buy-1").put("buy").put(200_000.0)
+                    .put("btc").put(0.25).put("wallet").put(JSONObject.NULL))
+                .put(JSONArray().put("sell-2").put("sell").put(100_000.0)
+                    .put("btc").put(0.05).put(JSONObject.NULL).put("wallet")))
+        tables.getJSONObject("transaction_voids")
+            .put("columns", JSONArray().put("transaction_id"))
+            .put("rowids", JSONArray().put(1))
+            .put("rows", JSONArray().put(JSONArray().put("sell-2")))
+        tables.getJSONObject("quantity_corrections")
+            .put("columns", JSONArray().put("asset_id").put("delta"))
+            .put("rowids", JSONArray().put(1))
+            .put("rows", JSONArray().put(JSONArray().put("btc").put(0.10)))
+        val preview = body.getJSONObject("preview")
+        preview.put("transactionCount", 2).put("activeTransactionCount", 1)
+            .put("correctionCount", 1).put("voidCount", 1)
+        preview.getJSONArray("holdings").getJSONObject(0).put("quantity", 1.35)
+        preview.getJSONArray("cashAccounts").getJSONObject(0)
+            .put("balance_toman", 1_300_000.0)
+
+        val inspected = CoreSnapshotPreview.inspect(wrap(body).toString())
+        assertEquals(2, inspected.transactions)
+        assertEquals(1, inspected.voids)
+        assertEquals(1, inspected.corrections)
+
+        preview.getJSONArray("cashAccounts").getJSONObject(0)
+            .put("balance_toman", 1_400_000.0)
+        assertThrows(IllegalArgumentException::class.java) {
+            CoreSnapshotPreview.inspect(wrap(body).toString())
+        }
+    }
+
+    @Test fun unknownCoreTransactionTypeFailsClosed() {
+        val envelope = sample()
+        val body = JSONObject(String(Base64.getDecoder().decode(envelope.getString("payloadBase64"))))
+        body.getJSONObject("tables").getJSONObject("transactions")
+            .put("columns", JSONArray().put("id").put("type").put("amount_toman"))
+            .put("rowids", JSONArray().put(1))
+            .put("rows", JSONArray().put(JSONArray().put("unknown-1").put("trade-magic").put(100.0)))
+        body.getJSONObject("preview").put("transactionCount", 1).put("activeTransactionCount", 1)
+        assertThrows(IllegalArgumentException::class.java) {
+            CoreSnapshotPreview.inspect(wrap(body).toString())
+        }
+    }
+
     @Test fun AndroidJsonIsNotAcceptedAsWindowsCore() {
         assertThrows(IllegalArgumentException::class.java) {
             CoreSnapshotPreview.inspect("""{"format":"investment.shared.portfolio","schemaVersion":1}""")
