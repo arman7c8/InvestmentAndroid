@@ -9,19 +9,33 @@ See [Interoperability and safety](docs/INTEROPERABILITY.md) before attempting an
 cross-device restore. Do not select the Windows `Investment-core.sqlite3` as an
 Android cloud document.
 
-## Install a test build
+## Install a test build (safe alongside the existing app)
 
-The [Build Android APK workflow](../../actions/workflows/build-apk.yml) tests, lints,
-builds, and verifies the debug APK on each `codex/**` branch push and pull request.
-Open the successful run for the latest source commit and download its
-`InvestmentAndroid-0.32.0-debug-<commit>` artifact. Unzip it and install
-`InvestmentAndroid-0.32.0-debug.apk` on Android 8 or later. The artifact includes
-`SOURCE-COMMIT.txt` and `SHA256SUMS.txt` for verification.
+The [Build Android APK workflow](../../actions/workflows/build-apk.yml) runs
+unit tests, lint, builds and verifies a **side-by-side debug preview** from each
+`codex/**` branch commit. Download the run's
+`InvestmentAndroid-0.32.0-isolated-preview-<commit>` artifact ZIP, unzip it,
+and install the APK with the name `InvestmentAndroid-0.32.0-preview<sha12>.apk`.
 
-This is a debug-signed test build. An existing installation with another signing
-certificate cannot be updated in place. **Export and retain a portfolio backup
-before uninstalling an existing app**, since uninstalling removes its local data.
-A stable release signing credential is needed for updateable production builds.
+**Do not uninstall your existing `Investment Android` app.** The preview is
+installed as a **separate app** labeled `Investment Preview` with application ID
+`com.arman.investmentandroid.preview<sha12>`. It has independent blank local
+data and preferences. It cannot access the original installation's internal
+portfolio. Use it only for UI/features evaluation; do not point its Cloud Sync
+at a live shared portfolio. The SHA suffix changes on each new commit, so
+different preview versions are *separate app installations*. You may remove
+obsolete previews without removing the original app, but preview-local data
+will then be lost.
+
+The normal application ID `com.arman.investmentandroid` is **unchanged** for
+non-preview builds. Signing a truly updatable regular release still requires
+a stable private signing key managed in a secure CI secret (never committed).
+A one-time release signing setup and explicitly planned migration are required
+before normal in-place updates can work; no generated debug key can upgrade an
+APK signed by an unrelated debug key.
+
+The artifact includes `SOURCE-COMMIT.txt` (with the exact preview package)
+and `SHA256SUMS.txt` for verifying the generated APK.
 
 ## Backup and cloud behavior
 

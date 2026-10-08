@@ -3,7 +3,7 @@
 
     <application
         android:allowBackup="true"
-        android:label="Investment Android"
+        android:label="${appDisplayName}"
         android:supportsRtl="true"
         android:theme="@style/AppTheme">
         <activity

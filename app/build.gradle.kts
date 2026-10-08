@@ -15,6 +15,26 @@ android {
         versionName = "0.32.0"
     }
 
+    // CI-only side-load preview: one isolated applicationId per source commit.
+    // Do NOT change the regular applicationId or any production user data.
+    // Separate IDs avoid update-signature conflicts with existing installations.
+    buildTypes {
+        getByName("debug") {
+            val previewSuffix = providers.gradleProperty("previewApplicationSuffix").orNull
+            if (previewSuffix != null) {
+                require(Regex("preview[a-f0-9]{12}").matches(previewSuffix)) {
+                    "Invalid previewApplicationSuffix; expected preview + 12 hex digits."
+                }
+                applicationIdSuffix = ".$previewSuffix"
+                manifestPlaceholders["appDisplayName"] = "Investment Preview"
+            }
+        }
+    }
+
+    defaultConfig {
+        manifestPlaceholders["appDisplayName"] = "Investment Android"
+    }
+
     buildFeatures {
         buildConfig = true
     }
