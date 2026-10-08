@@ -117,6 +117,8 @@ class MainActivity : Activity() {
     private val corePreviewRequestCode = 1005
     private val corePolicyProposalSaveRequestCode = 1006
     private var pendingCorePolicyProposalJson: String? = null
+    private val coreFinancialProposalSaveRequestCode = 1007
+    private var pendingCoreFinancialProposalJson: String? = null
     private val createCloudBackupRequestCode = 1003
     private val connectCloudBackupRequestCode = 1004
     private val coreCategories = listOf("Cash", "Gold", "Stocks", "Crypto", "Fund", "Other")
@@ -4814,6 +4816,143 @@ class MainActivity : Activity() {
         dialog.show()
     }
 
+    /** Export an offline Core command proposal; never modify financial state. */
+    private fun chooseCoreFinancialRequest(snapshot: CoreSnapshotPreview.Summary) {
+        val kinds = listOf("buy", "sell", "transfer", "deposit", "withdraw")
+        val labels = listOf(
+            "Buy from cash account", "Sell to cash account",
+            "Transfer between cash accounts", "Deposit cash", "Withdraw cash"
+        )
+        AlertDialog.Builder(this)
+            .setTitle(ui("Prepare Windows financial request"))
+            .setItems(labels.map(::ui).toTypedArray()) { _, index ->
+                showCoreFinancialRequestEditor(snapshot, kinds[index])
+            }
+            .setNegativeButton(ui("Cancel"), null)
+            .show()
+    }
+
+    private fun showCoreFinancialRequestEditor(
+        snapshot: CoreSnapshotPreview.Summary, kind: String
+    ) {
+        val isTrade = kind == "buy" || kind == "sell"
+        val isTransfer = kind == "transfer"
+        val cash = snapshot.cashBalances
+        val assets = snapshot.positions
+        if (cash.isEmpty() || (isTrade && assets.isEmpty()) ||
+            (isTransfer && cash.size < 2)) {
+            Toast.makeText(
+                this, ui("Windows Core snapshot lacks the accounts or assets needed."),
+                Toast.LENGTH_LONG
+            ).show()
+            return
+        }
+        val form = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(18), dp(10), dp(18), dp(10))
+        }
+        form.addView(TextView(this).apply {
+            text = ui("Offline simulation request; no transactions are recorded.")
+            textSize = 13f
+            setTextColor(PortfolioAppearance.WARNING)
+            setPadding(0, 0, 0, dp(9))
+        })
+        fun label(title: String) {
+            form.addView(TextView(this).apply {
+                text = ui(title)
+                textSize = 14f
+                setPadding(0, dp(9), 0, dp(3))
+            })
+        }
+        fun spinner(title: String, choices: List<String>): Spinner {
+            label(title)
+            val choice = Spinner(this)
+            choice.adapter = ArrayAdapter(
+                this, android.R.layout.simple_spinner_item, choices
+            ).apply {
+                setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item)
+            }
+            form.addView(choice)
+            return choice
+        }
+        fun input(title: String): EditText {
+            label(title)
+            val editor = EditText(this).apply {
+                inputType = InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_FLAG_DECIMAL
+                hint = ui(title)
+                setSingleLine(true)
+            }
+            form.addView(editor)
+            return editor
+        }
+        val accountLabels = cash.map {
+            it.id + " • " + it.balanceToman + " " + ui("Toman")
+        }
+        val account = spinner(
+            if (isTransfer) "Source cash account" else "Cash account",
+            accountLabels
+        )
+        val destination = if (isTransfer) spinner(
+            "Destination cash account", accountLabels
+        ).apply { setSelection(1) } else null
+        val asset = if (isTrade) spinner(
+            "Windows Core asset",
+            assets.map { it.name + " (" + it.id + ") • " + it.quantity }
+        ) else null
+        val amountInput = input("Total trade amount (Toman)")
+        val quantityInput = if (isTrade) input("Trade quantity") else null
+        val dialog = AlertDialog.Builder(this)
+            .setTitle(ui("Prepare Windows financial request"))
+            .setView(ScrollView(this).apply { addView(form) })
+            .setNegativeButton(ui("Cancel"), null)
+            .setPositiveButton(ui("Export request (not applied)"), null)
+            .create()
+        dialog.setOnShowListener {
+            dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
+                val money = UiText.parseUserNumber(amountInput.text.toString())
+                if (money == null || money <= 0.0) {
+                    amountInput.error = ui("Enter a positive amount.")
+                    return@setOnClickListener
+                }
+                val qty = if (isTrade) UiText.parseUserNumber(
+                    quantityInput!!.text.toString()
+                ) else null
+                if (isTrade && (qty == null || qty <= 0.0)) {
+                    quantityInput!!.error = ui("Enter a positive quantity.")
+                    return@setOnClickListener
+                }
+                try {
+                    pendingCoreFinancialProposalJson = CoreFinancialProposal.create(
+                        snapshot,
+                        CoreFinancialProposal.Command(
+                            type = kind,
+                            amountToman = money,
+                            assetId = asset?.let { assets[it.selectedItemPosition].id },
+                            accountId = cash[account.selectedItemPosition].id,
+                            quantity = qty,
+                            destinationAccountId = destination?.let {
+                                cash[it.selectedItemPosition].id
+                            }
+                        )
+                    )
+                    val intent = Intent(Intent.ACTION_CREATE_DOCUMENT).apply {
+                        addCategory(Intent.CATEGORY_OPENABLE)
+                        type = "application/json"
+                        putExtra(Intent.EXTRA_TITLE, "Investment-Core-financial-proposal.json")
+                    }
+                    dialog.dismiss()
+                    startActivityForResult(intent, coreFinancialProposalSaveRequestCode)
+                } catch (error: Exception) {
+                    Toast.makeText(
+                        this, ui(error.message ?: "Invalid financial proposal."),
+                        Toast.LENGTH_LONG
+                    ).show()
+                }
+            }
+        }
+        dialog.show()
+    }
+
     private fun exportBackup() {
         val intent = Intent(Intent.ACTION_CREATE_DOCUMENT).apply {
             addCategory(Intent.CATEGORY_OPENABLE)
@@ -5173,6 +5312,7 @@ class MainActivity : Activity() {
 
         if (resultCode != RESULT_OK) {
             if (requestCode == corePolicyProposalSaveRequestCode) pendingCorePolicyProposalJson = null
+            if (requestCode == coreFinancialProposalSaveRequestCode) pendingCoreFinancialProposalJson = null
             if (
                 requestCode == createCloudBackupRequestCode ||
                 requestCode == connectCloudBackupRequestCode
@@ -5188,6 +5328,7 @@ class MainActivity : Activity() {
 
         val uri = data?.data ?: run {
             if (requestCode == corePolicyProposalSaveRequestCode) pendingCorePolicyProposalJson = null
+            if (requestCode == coreFinancialProposalSaveRequestCode) pendingCoreFinancialProposalJson = null
             if (
                 requestCode == createCloudBackupRequestCode ||
                 requestCode == connectCloudBackupRequestCode
@@ -5221,6 +5362,11 @@ class MainActivity : Activity() {
                                 previewDialog.setNeutralButton(
                                     ui("Prepare target request")
                                 ) { _, _ -> showCorePolicyProposalEditor(summary) }
+                                if (summary.cashBalances.isNotEmpty()) {
+                                    previewDialog.setNegativeButton(
+                                        ui("Prepare financial request")
+                                    ) { _, _ -> chooseCoreFinancialRequest(summary) }
+                                }
                             }
                             previewDialog.show()
                         },
@@ -5246,6 +5392,34 @@ class MainActivity : Activity() {
                                 Toast.makeText(
                                     this,
                                     ui("Target request saved. No investment data changed."),
+                                    Toast.LENGTH_LONG
+                                ).show()
+                            },
+                            onFailure = { error -> showBackupFileError(error) }
+                        )
+                    }
+                }
+                coreFinancialProposalSaveRequestCode -> {
+                    val request = pendingCoreFinancialProposalJson
+                    pendingCoreFinancialProposalJson = null
+                    if (request == null) {
+                        showBackupFileError(
+                            IllegalStateException("No financial request to export.")
+                        )
+                    } else {
+                        runStorageOperation(
+                            label = "Saving Windows financial request",
+                            task = {
+                                PortfolioSafety.writeAndVerifyBackup(
+                                    request,
+                                    write = { writeUriText(uri, it) },
+                                    read = { readUriText(uri) }
+                                )
+                            },
+                            onSuccess = {
+                                Toast.makeText(
+                                    this,
+                                    ui("Financial request saved; no financial data changed."),
                                     Toast.LENGTH_LONG
                                 ).show()
                             },
