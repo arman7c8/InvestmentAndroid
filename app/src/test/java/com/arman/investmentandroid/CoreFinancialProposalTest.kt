@@ -110,6 +110,36 @@ class CoreFinancialProposalTest {
         }
     }
 
+    @Test fun samePortableBuyFixtureAsWindowsPythonValidator() {
+        val resource = javaClass.getResource("/core_mobile_financial_buy_v1.json")
+            ?: error("Missing shared JSON contract fixture.")
+        val fixture = JSONObject(resource.readText())
+        val actual = JSONObject(CoreFinancialProposal.create(
+            snapshot(), command("buy", asset = "btc", qty = 0.1),
+            fixture.getString("operationId")
+        ))
+        assertEquals(fixture.getString("format"), actual.getString("format"))
+        assertEquals(fixture.getInt("contractVersion"),
+            actual.getInt("contractVersion"))
+        assertEquals(fixture.getString("baseSnapshotSha256"),
+            actual.getString("baseSnapshotSha256"))
+        assertEquals(fixture.getString("operationId"), actual.getString("operationId"))
+        val expectedTrade = fixture.getJSONObject("transaction")
+        val actualTrade = actual.getJSONObject("transaction")
+        assertEquals(expectedTrade.getString("assetId"), actualTrade.getString("assetId"))
+        assertEquals(expectedTrade.getString("accountId"), actualTrade.getString("accountId"))
+        assertEquals(expectedTrade.getDouble("amountToman"),
+            actualTrade.getDouble("amountToman"), 1e-7)
+        assertEquals(expectedTrade.getDouble("expectedAccountBalanceToman"),
+            actualTrade.getDouble("expectedAccountBalanceToman"), 1e-7)
+        assertEquals(expectedTrade.getDouble("expectedAssetQuantity"),
+            actualTrade.getDouble("expectedAssetQuantity"), 1e-12)
+        assertEquals(expectedTrade.getDouble("quantity"),
+            actualTrade.getDouble("quantity"), 1e-12)
+        assertEquals(expectedTrade.length(), actualTrade.length())
+        assertEquals(fixture.length(), actual.length())
+    }
+
     @Test fun cannotPrepareWithoutCoreV2AndVerifiedSnapshotIdentity() {
         assertThrows(IllegalArgumentException::class.java) {
             CoreFinancialProposal.create(snapshot().copy(policy = null),
