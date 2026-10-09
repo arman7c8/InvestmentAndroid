@@ -1,7 +1,6 @@
 package com.arman.investmentandroid
 
 import android.content.Context
-import android.util.AtomicFile
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
@@ -10,7 +9,9 @@ import java.time.Instant
 import java.time.temporal.ChronoUnit
 import java.util.UUID
 
-class AiRecommendationJournal(context: Context) {
+class AiRecommendationJournal private constructor(private val file: File) {
+    constructor(context: Context) : this(File(context.noBackupFilesDir, "ai-recommendation-journal.json"))
+    internal constructor(path: String) : this(File(path))
     companion object {
         const val FORMAT = "investment.ai.journal"
         const val SCHEMA_VERSION = 1
@@ -19,7 +20,6 @@ class AiRecommendationJournal(context: Context) {
 
     class JournalException(message: String) : IllegalArgumentException(message)
 
-    private val file = File(context.noBackupFilesDir, "ai-recommendation-journal.json")
 
     private fun loadRoot(): JSONObject {
         if (!file.isFile) {
@@ -43,13 +43,21 @@ class AiRecommendationJournal(context: Context) {
     }
 
     private fun saveRoot(root: JSONObject) {
-        val atomic = AtomicFile(file)
-        val stream = atomic.startWrite()
         try {
-            stream.write((root.toString(2) + "\n").toByteArray(Charsets.UTF_8))
-            atomic.finishWrite(stream)
-        } catch (exc: Exception) {
-            atomic.failWrite(stream)
+            file.parentFile?.mkdirs()
+            val temporary = File(file.parentFile, file.name + ".tmp")
+            temporary.writeText(root.toString(2) + "\n", Charsets.UTF_8)
+            if (file.exists() && !file.delete()) {
+                temporary.delete()
+                throw JournalException("AI recommendation journal could not be replaced.")
+            }
+            if (!temporary.renameTo(file)) {
+                temporary.delete()
+                throw JournalException("AI recommendation journal could not be saved.")
+            }
+        } catch (exc: JournalException) {
+            throw exc
+        } catch (_: Exception) {
             throw JournalException("AI recommendation journal could not be saved.")
         }
     }
