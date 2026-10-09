@@ -158,7 +158,11 @@ object PortfolioSafety {
         val assets = portfolio.optJSONArray("assets") ?: return
         for (index in 0 until assets.length()) {
             val asset = assets.optJSONObject(index) ?: continue
-            require(asset.optString("source_platform") != "windows-core") {
+            val platform = asset.optString("source_platform",
+                asset.optString("sourcePlatform", "")).trim().lowercase(Locale.US)
+            val sharedId = asset.optString("id",
+                asset.optString("sharedId", "")).trim().lowercase(Locale.US)
+            require(platform != "windows-core" && !sharedId.startsWith("windows:")) {
                 "This file contains a Windows Core projection, not an editable Android ledger. " +
                     "Use View Windows Core Snapshot (Read-only). Nothing was changed."
             }
