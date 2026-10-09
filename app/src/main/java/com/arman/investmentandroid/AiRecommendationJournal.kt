@@ -62,6 +62,15 @@ class AiRecommendationJournal private constructor(private val file: File) {
         }
     }
 
+    fun listRecords(): List<JSONObject> {
+        val records = loadRoot().getJSONArray("records")
+        val result = mutableListOf<JSONObject>()
+        for (index in 0 until records.length()) {
+            result += JSONObject(records.getJSONObject(index).toString())
+        }
+        return result
+    }
+
     fun recordRecommendation(
         snapshot: JSONObject,
         recommendation: JSONObject,
