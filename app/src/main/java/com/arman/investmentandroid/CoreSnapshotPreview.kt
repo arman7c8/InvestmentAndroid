@@ -3,9 +3,34 @@ package com.arman.investmentandroid
 import org.json.JSONObject
 import java.security.MessageDigest
 import java.util.Base64
+import java.text.DecimalFormat
+import java.text.DecimalFormatSymbols
+import java.math.BigDecimal
+import java.math.RoundingMode
+import java.util.Locale
 
 /** Read-only verifier; cannot mutate Android data or its cloud destination. */
 object CoreSnapshotPreview {
+    // Display formatting only; never round the stored ledger or its parity checks.
+    private fun formatDisplayNumber(value: Double, money: Boolean = false): String {
+        require(value.isFinite()) { "Non-finite Core preview amount." }
+        val pattern = if (money) "#,##0.##" else "#,##0.####################"
+        val formatter = DecimalFormat(pattern, DecimalFormatSymbols(Locale.US))
+        formatter.roundingMode = RoundingMode.HALF_UP
+        val decimal = BigDecimal.valueOf(value)
+        // Tiny crypto amounts must never display as zero solely due to
+        // a decimal-place cap. BigDecimal also avoids binary-float UI noise.
+        if (!money) {
+            formatter.maximumFractionDigits = maxOf(
+                20, decimal.stripTrailingZeros().scale().coerceAtLeast(0)
+            )
+        }
+        return formatter.format(decimal)
+    }
+
+    internal fun formatMoneyForDisplay(value: Double): String = formatDisplayNumber(value, money = true)
+    internal fun formatQuantityForDisplay(value: Double): String = formatDisplayNumber(value)
+
     data class AssetPosition(val id: String, val name: String, val quantity: Double)
     data class CashPosition(val id: String, val balanceToman: Double)
 
@@ -102,15 +127,16 @@ object CoreSnapshotPreview {
             val value = if (item.isNull("value_toman")) "unpriced" else {
                 val amount = item.getDouble("value_toman")
                 require(amount.isFinite()) { "Non-finite value." }
-                amount.toString() + " Toman"
+                formatMoneyForDisplay(amount) + " Toman"
             }
-            item.getString("name") + " (" + item.getString("id") + "): " + qty + " — " + value
+            item.getString("name") + " (" + item.getString("id") + "): " +
+                formatQuantityForDisplay(qty) + " — " + value
         }
         val accounts = (0 until accountRows.length()).map { index ->
             val item = accountRows.getJSONObject(index)
             val value = item.getDouble("balance_toman")
             require(value.isFinite()) { "Non-finite account balance." }
-            item.getString("id") + ": " + value + " Toman"
+            item.getString("id") + ": " + formatMoneyForDisplay(value) + " Toman"
         }
         CoreLedgerParity.verify(tables, preview)
         val tx = preview.getInt("transactionCount")

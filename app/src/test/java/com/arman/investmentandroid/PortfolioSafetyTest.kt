@@ -328,4 +328,40 @@ class PortfolioSafetyTest {
 
         assertEquals(251, PortfolioSafety.mergeHistory(local, remote, "id").length())
     }
+
+    @Test
+    fun windowsCoreSharedProjectionCannotBeImportedOrOverwritten() {
+        val windows = asset(id = "windows:crypto:btc")
+            .put("source_platform", "windows-core")
+        val portfolio = sharedDocument(assets = JSONArray().put(windows))
+            .getJSONObject("sharedPortfolio")
+        // The existing shared schema is structurally valid for inspection.
+        assertEquals(1, PortfolioSafety.validateSharedPortfolio(portfolio))
+        val error = assertThrows(IllegalArgumentException::class.java) {
+            PortfolioSafety.requireEditableAndroidPortfolio(portfolio)
+        }
+        org.junit.Assert.assertTrue(error.message!!.contains("Read-only"))
+    }
+
+    @Test
+    fun importedWindowsCoreIdsAndLegacySourceMarkersRemainReadOnly() {
+        val cases = listOf(
+            asset(id = "windows:crypto:btc"),
+            asset().put("sourcePlatform", "windows-core"),
+            asset().put("sharedId", "windows:crypto:btc")
+        )
+        for (item in cases) {
+            val portfolio = JSONObject().put("assets", JSONArray().put(item))
+            assertThrows(IllegalArgumentException::class.java) {
+                PortfolioSafety.requireEditableAndroidPortfolio(portfolio)
+            }
+        }
+    }
+
+    @Test
+    fun normalAndroidPortfolioRemainsEditable() {
+        val portfolio = sharedDocument().getJSONObject("sharedPortfolio")
+        PortfolioSafety.requireEditableAndroidPortfolio(portfolio)
+        assertEquals(1, portfolio.getJSONArray("assets").length())
+    }
 }
