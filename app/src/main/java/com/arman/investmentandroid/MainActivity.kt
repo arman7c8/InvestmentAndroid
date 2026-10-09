@@ -111,6 +111,9 @@ class MainActivity : Activity() {
     private val cloudLastAutoCheckKey = "cloud_last_auto_check"
     private val preRestoreBackupKey = "pre_restore_backup_json"
     private val cloudPreWriteFileName = "cloud_prewrite_recovery.json"
+    // A separate offline Windows Core cache; never mixed into editable Android JSON.
+    private val windowsCoreHomeKey = "windows_core_home_readonly"
+    private val windowsCoreCacheName = "verified_windows_core_readonly.json"
     private val uiLanguageKey = "ui_language"
     private val exportBackupRequestCode = 1001
     private val importBackupRequestCode = 1002
@@ -1249,6 +1252,24 @@ class MainActivity : Activity() {
     }
 
     private fun showPortfolioScreen() {
+        if (isWindowsCoreHomeSelected()) {
+            try {
+                val overview = loadVerifiedWindowsCore()
+                    ?: throw IllegalStateException("Saved Windows Core file is missing.")
+                showWindowsCoreHome(overview)
+                return
+            } catch (_: Exception) {
+                // Fail closed, retain corrupted bytes for deliberate recovery,
+                // and return to the independent editable Android portfolio.
+                getSharedPreferences(prefsName, MODE_PRIVATE).edit()
+                    .putBoolean(windowsCoreHomeKey, false).apply()
+                Toast.makeText(
+                    this,
+                    ui("The saved Windows copy could not be verified. Android data was not changed."),
+                    Toast.LENGTH_LONG
+                ).show()
+            }
+        }
         onPortfolioScreen = true
         onPriceCenterScreen = false
         val assets = loadAssets()
@@ -1280,6 +1301,18 @@ class MainActivity : Activity() {
                 setTextColor(PortfolioAppearance.TEXT_PRIMARY)
             }
         )
+
+        if (windowsCoreCacheFile().isFile) {
+            container.addView(Button(this).apply {
+                text = ui("Show Windows Portfolio (Read-only)")
+                isAllCaps = false
+                setOnClickListener {
+                    getSharedPreferences(prefsName, MODE_PRIVATE).edit()
+                        .putBoolean(windowsCoreHomeKey, true).apply()
+                    showPortfolioScreen()
+                }
+            })
+        }
 
         addOverviewCard(
             parent = container,
@@ -4743,6 +4776,150 @@ class MainActivity : Activity() {
             .show()
     }
 
+    private fun windowsCoreCacheFile(): File =
+        File(noBackupFilesDir, windowsCoreCacheName)
+
+    private fun isWindowsCoreHomeSelected(): Boolean =
+        getSharedPreferences(prefsName, MODE_PRIVATE)
+            .getBoolean(windowsCoreHomeKey, false)
+
+    /** Keep this private, offline and excluded from Android Auto Backup. */
+    private fun saveVerifiedWindowsCore(raw: String) {
+        WindowsCoreHome.inspect(raw)
+        val file = AtomicFile(windowsCoreCacheFile())
+        val stream = file.startWrite()
+        try {
+            stream.write(raw.toByteArray(Charsets.UTF_8))
+            file.finishWrite(stream)
+        } catch (error: Exception) {
+            file.failWrite(stream)
+            throw error
+        }
+        // Verify stored bytes before enabling the Windows home view.
+        val saved = file.openRead().bufferedReader(Charsets.UTF_8).use { it.readText() }
+        WindowsCoreHome.inspect(saved)
+        require(saved == raw) { "Windows snapshot copy does not match the verified file." }
+    }
+
+    private fun loadVerifiedWindowsCore(): WindowsCoreHome.Overview? {
+        val file = windowsCoreCacheFile()
+        if (!file.isFile) return null
+        val raw = AtomicFile(file).openRead().bufferedReader(Charsets.UTF_8).use { it.readText() }
+        return WindowsCoreHome.inspect(raw)
+    }
+
+    private fun showWindowsCoreHome(data: WindowsCoreHome.Overview) {
+        onPortfolioScreen = true
+        onPriceCenterScreen = false
+
+        fun body(text: String, prominent: Boolean = false): TextView =
+            TextView(this).apply {
+                this.text = text
+                textSize = if (prominent) 20f else 14f
+                setTextColor(PortfolioAppearance.TEXT_PRIMARY)
+                if (prominent) setTypeface(typeface, Typeface.BOLD)
+                setPadding(dp(8), dp(7), dp(8), dp(7))
+                textDirection = View.TEXT_DIRECTION_FIRST_STRONG
+            }
+
+        fun panel(): LinearLayout = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(12), dp(10), dp(12), dp(10))
+            background = GradientDrawable().apply {
+                setColor(PortfolioAppearance.SURFACE)
+                cornerRadius = dp(14).toFloat()
+                setStroke(dp(1), PortfolioAppearance.BORDER)
+            }
+        }
+
+        fun amount(value: Double): String =
+            CoreSnapshotPreview.formatMoneyForDisplay(value) + " " + ui("Toman")
+
+        val container = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(16), dp(12), dp(16), dp(24))
+            setBackgroundColor(PortfolioAppearance.BACKGROUND)
+        }
+
+        container.addView(body(ui("Windows Portfolio") + "  •  " + ui("Read-only"), true))
+        container.addView(body(ui("Offline copy only. This is not live synchronization.")))
+
+        val top = panel()
+        top.addView(body(ui(if (data.completeValueToman == null)
+            "Priced holdings + cash (incomplete)" else "Estimated portfolio value")))
+        top.addView(body(amount(data.partialValueToman), true))
+        if (data.missingPriceCount > 0) {
+            top.addView(body(
+                ui("Some nonzero holdings have no price. Total is incomplete.") +
+                    " (" + data.missingPriceCount + ")"
+            ).apply { setTextColor(PortfolioAppearance.WARNING) })
+        }
+        top.addView(body(
+            ui("Assets") + ": " + data.holdings.size +
+                "   •   " + ui("Cash accounts") + ": " + data.cashAccounts.size +
+                "   •   " + ui("Transactions") + ": " + data.transactionCount
+        ))
+        top.addView(body("SHA-256: " + data.sha256.take(12) + "…"))
+        container.addView(top)
+
+        container.addView(body(ui("Windows holdings"), true))
+        val holdings = panel()
+        data.holdings.sortedWith(
+            compareByDescending<WindowsCoreHome.Holding> { it.valueToman ?: Double.NEGATIVE_INFINITY }
+                .thenBy { it.name }
+        ).forEach { item ->
+            val title = buildString {
+                append(item.name)
+                item.groupName?.let { append("  •  "); append(it) }
+            }
+            holdings.addView(body(title, true))
+            holdings.addView(body(
+                ui("Quantity") + ": " + CoreSnapshotPreview.formatQuantityForDisplay(item.quantity)
+            ))
+            holdings.addView(body(
+                ui("Value") + ": " +
+                    (item.valueToman?.let(::amount) ?: ui("Price unavailable"))
+            ))
+            item.effectiveTargetPercent?.let {
+                holdings.addView(body(
+                    ui("Target") + ": " + CoreSnapshotPreview.formatQuantityForDisplay(it) + "%"
+                ))
+            }
+        }
+        container.addView(holdings)
+
+        container.addView(body(ui("Windows cash accounts"), true))
+        val cash = panel()
+        data.cashAccounts.forEach { item ->
+            cash.addView(body(item.id + ": " + amount(item.balanceToman)))
+        }
+        container.addView(cash)
+
+        container.addView(Button(this).apply {
+            text = ui("Load newer Windows snapshot")
+            isAllCaps = false
+            setOnClickListener { previewWindowsCoreSnapshot() }
+        })
+        container.addView(Button(this).apply {
+            text = ui("Switch to Android local portfolio")
+            isAllCaps = false
+            setOnClickListener {
+                getSharedPreferences(prefsName, MODE_PRIVATE).edit()
+                    .putBoolean(windowsCoreHomeKey, false).apply()
+                showPortfolioScreen()
+            }
+        })
+        container.addView(body(ui("Windows holdings are view-only; use Windows for transactions.")))
+
+        showContentRespectingSystemBars(
+            ScrollView(this).apply {
+                setBackgroundColor(PortfolioAppearance.BACKGROUND)
+                isVerticalScrollBarEnabled = false
+                addView(container)
+            }
+        )
+    }
+
     private fun previewWindowsCoreSnapshot() {
         val intent = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
             addCategory(Intent.CATEGORY_OPENABLE)
@@ -5439,8 +5616,13 @@ class MainActivity : Activity() {
                 corePreviewRequestCode -> {
                     runStorageOperation(
                         label = "Inspecting Windows Core snapshot",
-                        task = { CoreSnapshotPreview.inspect(readUriText(uri)) },
-                        onSuccess = { summary ->
+                        task = {
+                            val raw = readUriText(uri)
+                            Triple(raw, CoreSnapshotPreview.inspect(raw), WindowsCoreHome.inspect(raw))
+                        },
+                        onSuccess = { result ->
+                            val raw = result.first
+                            val summary = result.second
                             // Bound only the text viewport to the screen. Keep
                             // Close and proposal actions visible on smaller phones.
                             val scroll = ScrollView(this).apply {
@@ -5467,6 +5649,23 @@ class MainActivity : Activity() {
                                 .setView(content)
                                 .setPositiveButton(ui("Close"), null)
                                 .create()
+                            // Explicit opt-in: keep Windows data in isolated no-backup
+                            // storage. Local Android assets and history are unchanged.
+                            content.addView(Button(this).apply {
+                                text = ui("Show on home (Windows read-only)")
+                                isAllCaps = false
+                                setOnClickListener {
+                                    try {
+                                        saveVerifiedWindowsCore(raw)
+                                        getSharedPreferences(prefsName, MODE_PRIVATE).edit()
+                                            .putBoolean(windowsCoreHomeKey, true).apply()
+                                        previewDialog.dismiss()
+                                        showPortfolioScreen()
+                                    } catch (error: Exception) {
+                                        showBackupFileError(error)
+                                    }
+                                }
+                            })
                             if (summary.policy != null) {
                                 if (summary.cashBalances.isNotEmpty()) {
                                     content.addView(Button(this).apply {
