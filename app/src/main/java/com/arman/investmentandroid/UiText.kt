@@ -3,6 +3,8 @@ package com.arman.investmentandroid
 /** Translate display labels without changing persisted portfolio keys. */
 object UiText {
     private val fa = mapOf(
+        "Finish the current price or cloud operation before switching portfolio views." to
+            "پیش از جابه‌جایی بین سبدها، منتظر پایان به‌روزرسانی قیمت یا همگام‌سازی فعلی بمانید.",
         "Windows Portfolio" to "سبد ویندوز",
         "Read-only" to "فقط‌خواندنی",
         "Imported to phone: " to "زمان بارگذاری در گوشی: ",
