@@ -436,6 +436,9 @@ class ChatGptPlanClient(private val context: Context) {
                         "portfolio snapshot and optional Atlas public market context. Never request " +
                         "or infer monetary values, balances, account identity, or credentials. " +
                         "Target changes are recommendations only and require explicit user approval. " +
+                        "Recommendation history may include accepted, applied and observed outcome fields. " +
+                        "Treat outcomes as observational, not causal; never score a prior recommendation " +
+                        "as successful or failed solely from portfolio return, especially when applied is false. " +
                         AiAdvisorRecommendation.promptContract()
                 )
                 .put(
