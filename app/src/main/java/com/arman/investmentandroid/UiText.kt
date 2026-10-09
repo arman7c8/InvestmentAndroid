@@ -3,6 +3,30 @@ package com.arman.investmentandroid
 /** Translate display labels without changing persisted portfolio keys. */
 object UiText {
     private val fa = mapOf(
+        "Windows Portfolio" to "سبد ویندوز",
+        "Read-only" to "فقط‌خواندنی",
+        "Offline copy only. This is not live synchronization." to
+            "این یک نسخه آفلاین است و همگام‌سازی زنده انجام نمی‌شود.",
+        "Estimated portfolio value" to "ارزش تقریبی سبد بر اساس آخرین فایل",
+        "Priced holdings + cash (incomplete)" to "مجموع دارایی‌های قیمت‌دار و نقد (ناقص)",
+        "Some nonzero holdings have no price. Total is incomplete." to
+            "قیمت بعضی دارایی‌ها موجود نیست؛ ارزش کل ناقص است.",
+        "Assets" to "دارایی‌ها",
+        "Cash accounts" to "حساب‌های نقدی",
+        "Transactions" to "تراکنش‌ها",
+        "Windows holdings" to "دارایی‌های ویندوز",
+        "Windows cash accounts" to "حساب‌های نقدی ویندوز",
+        "Value" to "ارزش",
+        "Price unavailable" to "قیمت موجود نیست",
+        "Target" to "هدف تخصیص",
+        "Show Windows Portfolio (Read-only)" to "نمایش سبد ویندوز (فقط‌خواندنی)",
+        "Load newer Windows snapshot" to "بارگذاری فایل جدید ویندوز",
+        "Switch to Android local portfolio" to "بازگشت به سبد محلی اندروید",
+        "Windows holdings are view-only; use Windows for transactions." to
+            "دارایی‌های ویندوز فقط قابل مشاهده‌اند؛ تراکنش‌ها را فعلاً در ویندوز ثبت کنید.",
+        "Show on home (Windows read-only)" to "نمایش در صفحه اصلی (ویندوز فقط‌خواندنی)",
+        "The saved Windows copy could not be verified. Android data was not changed." to
+            "فایل ذخیره‌شده ویندوز قابل تأیید نیست؛ اطلاعات اندروید تغییر نکرد.",
         "Investment Android" to "سرمایه‌گذاری اندروید",
         "Prepare target request" to "تهیه درخواست تغییر اهداف",
         "Prepare Windows target change request" to "تهیه درخواست تغییر اهداف ویندوز",
