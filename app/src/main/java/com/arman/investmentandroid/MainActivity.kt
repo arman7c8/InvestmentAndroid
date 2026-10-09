@@ -4037,6 +4037,9 @@ class MainActivity : Activity() {
         }
 
         val localPortfolio = buildSharedPortfolio()
+        // Also block first-time cloud creation and forced writes from a
+        // previously imported Windows Core projection.
+        PortfolioSafety.requireEditableAndroidPortfolio(localPortfolio)
         val previousPortfolio = root.optJSONObject("sharedPortfolio")
         val previousAssets = previousPortfolio?.optJSONArray("assets")
         val previousById = mutableMapOf<String, JSONObject>()
@@ -5392,7 +5395,10 @@ class MainActivity : Activity() {
                 validated.sharedPortfolio?.let(PortfolioSafety::requireEditableAndroidPortfolio)
                 applySharedBackup(validated, mergeLocalHistory)
             }
-            PortfolioSafety.BackupKind.LEGACY_ANDROID -> applyLegacyAndroidBackup(validated)
+            PortfolioSafety.BackupKind.LEGACY_ANDROID -> {
+                PortfolioSafety.requireEditableAndroidPortfolio(validated.root)
+                applyLegacyAndroidBackup(validated)
+            }
         }
     }
 
