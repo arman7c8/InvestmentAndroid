@@ -120,6 +120,55 @@ object CoreLedgerParity {
             }
         }
 
+        // Validate the market-price projection independently, including
+        // native USDT quotes repriced with the latest reference asset.
+        // A valid SHA alone does not prove the displayed valuation is correct.
+        val latestQuotes = linkedMapOf<String, JSONObject>()
+        val prices = Table(tables, "prices").records()
+        prices.withIndex().sortedWith(
+            compareBy<IndexedValue<JSONObject>> { string(it.value, "observed_at") }
+                .thenBy { it.index }
+        ).forEach { (_, row) ->
+            val id = string(row, "asset_id")
+            require(id in assetIds) { "Price record has an unknown Core asset." }
+            latestQuotes[id] = row
+        }
+
+        fun currentPrice(assetId: String, seen: Set<String> = emptySet()): Double? {
+            require(assetId !in seen) { "Circular Core FX reference." }
+            val quote = latestQuotes[assetId] ?: return null
+            val native = if (!quote.has("native_price") || quote.isNull("native_price")) null
+                else finite(quote, "native_price")
+            val result = if (native != null) {
+                val reference = string(quote, "reference_asset_id")
+                if (reference.isBlank()) return null
+                require(reference in assetIds) { "Unknown Core FX reference." }
+                val rate = currentPrice(reference, seen + assetId) ?: return null
+                native * rate
+            } else finite(quote, "price_toman")
+            require(result.isFinite() && result > 0.0) { "Invalid current Core quote." }
+            return result
+        }
+
+        for (index in 0 until holdings.length()) {
+            val item = holdings.getJSONObject(index)
+            val id = string(item, "id")
+            val quote = currentPrice(id)
+            if (quote == null) {
+                require(!item.has("value_toman") || item.isNull("value_toman")) {
+                    "Unpriced Core holding has a fabricated value: $id."
+                }
+            } else {
+                val quantity = quantities[id] ?: 0.0
+                val expectedValue = quantity * quote
+                require(expectedValue.isFinite() &&
+                    !item.isNull("value_toman") &&
+                    sameNumber(expectedValue, finite(item, "value_toman"))) {
+                    "Core holding valuation differs from current price/FX ledger: $id."
+                }
+            }
+        }
+
         val accounts = preview.getJSONArray("cashAccounts")
         val seenAccounts = mutableSetOf<String>()
         val expected = balances.filterKeys { it != "external" }
