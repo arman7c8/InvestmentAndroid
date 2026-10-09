@@ -51,6 +51,18 @@ class CoreSnapshotPreviewTest {
             .put("contractVersion", version).put("encoding", "base64-json-utf8")
             .put("sha256", checksum).put("payloadBase64", Base64.getEncoder().encodeToString(bytes))
     }
+    @Test fun readonlyPreviewShowsGroupedAmountsWithoutScientificNotation() {
+        assertEquals("233,984,800", CoreSnapshotPreview.formatMoneyForDisplay(2.339848E8))
+        assertEquals("198,939,867.7", CoreSnapshotPreview.formatMoneyForDisplay(198_939_867.70000002))
+        assertEquals("98,741.3", CoreSnapshotPreview.formatMoneyForDisplay(98_741.30000000075))
+        assertEquals("379.439", CoreSnapshotPreview.formatQuantityForDisplay(379.439))
+        assertEquals("0.00000001", CoreSnapshotPreview.formatQuantityForDisplay(0.00000001))
+        val summary = CoreSnapshotPreview.inspect(sample().toString()).display(false)
+        org.junit.Assert.assertTrue(summary.contains("5,000,000 Toman"))
+        org.junit.Assert.assertTrue(summary.contains("1,500,000 Toman"))
+        org.junit.Assert.assertTrue(summary.contains("1 — 5,000,000 Toman"))
+    }
+
     @Test fun validSnapshotCanBePreviewedWithoutImporting() {
         val preview = CoreSnapshotPreview.inspect(sample().toString())
         assertEquals(11, preview.schema)
