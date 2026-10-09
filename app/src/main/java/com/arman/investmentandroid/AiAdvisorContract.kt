@@ -124,9 +124,9 @@ object AiAdvisorContract {
         }
 
         val privacy = JSONObject()
-            .put("monetary_values_included", false)
-            .put("quantities_included", false)
-            .put("account_identifiers_included", false)
+            .put("money_included", false)
+            .put("units_included", false)
+            .put("account_ids_included", false)
             .put("personal_identity_included", false)
 
         val payload = JSONObject()
@@ -179,9 +179,9 @@ object AiAdvisorContract {
         val privacy = payload.optJSONObject("privacy")
             ?: throw ContractException("AI snapshot privacy declaration is missing.")
         val flags = listOf(
-            "monetary_values_included",
-            "quantities_included",
-            "account_identifiers_included",
+            "money_included",
+            "units_included",
+            "account_ids_included",
             "personal_identity_included"
         )
         if (flags.any { privacy.optBoolean(it, true) }) {
