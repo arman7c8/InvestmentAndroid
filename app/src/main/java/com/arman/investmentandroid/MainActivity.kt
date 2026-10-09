@@ -2144,9 +2144,92 @@ class MainActivity : Activity() {
         }
     }
 
+    private fun showAiRecommendationHistoryDialog() {
+        val records = try {
+            aiRecommendationJournal.listRecords().asReversed()
+        } catch (exc: Exception) {
+            Toast.makeText(
+                this,
+                ui(exc.message ?: "Could not read AI recommendation history."),
+                Toast.LENGTH_LONG
+            ).show()
+            return
+        }
+
+        if (records.isEmpty()) {
+            Toast.makeText(
+                this,
+                ui("No AI recommendations have been recorded yet."),
+                Toast.LENGTH_SHORT
+            ).show()
+            return
+        }
+
+        val scroll = ScrollView(this)
+        val body = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(18), dp(12), dp(18), dp(12))
+        }
+        scroll.addView(body)
+
+        records.take(30).forEach { record ->
+            val recommendation = record.optJSONObject("recommendation")
+            val outcome = record.optJSONObject("outcome")
+            val label = buildString {
+                append(record.optString("created_at").take(19).replace("T", " "))
+                append("  •  ")
+                append(record.optString("status", "pending").uppercase(Locale.US))
+                append("\n")
+                append(recommendation?.optString("summary", "") ?: "")
+                append("\nConfidence: ")
+                append(String.format(
+                    Locale.US,
+                    "%.0f%%",
+                    recommendation?.optDouble("confidence_pct", 0.0) ?: 0.0
+                ))
+                append("  •  Review: ")
+                append(record.optString("review_due_at").take(10))
+                if (outcome != null) {
+                    append("\nOutcome: ")
+                    append(String.format(
+                        Locale.US,
+                        "%+.2f%%",
+                        outcome.optDouble("portfolio_return_pct", 0.0)
+                    ))
+                }
+            }
+            body.addView(
+                TextView(this).apply {
+                    text = label
+                    textSize = 14f
+                    setTextColor(Color.DKGRAY)
+                    setPadding(dp(12), dp(10), dp(12), dp(10))
+                    background = GradientDrawable().apply {
+                        setColor(Color.WHITE)
+                        cornerRadius = dp(10).toFloat()
+                        setStroke(dp(1), Color.rgb(225, 225, 225))
+                    }
+                },
+                LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.WRAP_CONTENT
+                ).apply {
+                    bottomMargin = dp(8)
+                }
+            )
+        }
+
+        AlertDialog.Builder(this)
+            .setTitle(ui("AI Recommendation History"))
+            .setView(scroll)
+            .setPositiveButton(ui("Close"), null)
+            .show()
+    }
+
     private fun showToolsDialog() {
         val options = arrayOf(
             "AI Portfolio Summary",
+            "AI Recommendation History",
             "Google Drive / Cloud Backup",
             "Edit Targets",
             "Rebalance Tolerance",
@@ -2163,15 +2246,16 @@ class MainActivity : Activity() {
             .setItems(options.map(::ui).toTypedArray()) { _, which ->
                 when (which) {
                     0 -> sharePrivacySafeAiSummary()
-                    1 -> showCloudBackupDialog()
-                    2 -> showTargetsDialog()
-                    3 -> showToleranceDialog()
-                    4 -> showHistoryDialog()
-                    5 -> showCategoryManagerDialog()
-                    6 -> showAppLockDialog()
-                    7 -> showSettingsDialog()
-                    8 -> showBackupDialog()
-                    9 -> showResetDemoDialog()
+                    1 -> showAiRecommendationHistoryDialog()
+                    2 -> showCloudBackupDialog()
+                    3 -> showTargetsDialog()
+                    4 -> showToleranceDialog()
+                    5 -> showHistoryDialog()
+                    6 -> showCategoryManagerDialog()
+                    7 -> showAppLockDialog()
+                    8 -> showSettingsDialog()
+                    9 -> showBackupDialog()
+                    10 -> showResetDemoDialog()
                 }
             }
             .setNegativeButton(ui("Close"), null)
