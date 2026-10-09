@@ -5,6 +5,7 @@ object UiText {
     private val fa = mapOf(
         "Windows Portfolio" to "سبد ویندوز",
         "Read-only" to "فقط‌خواندنی",
+        "Imported to phone: " to "زمان بارگذاری در گوشی: ",
         "Offline copy only. This is not live synchronization." to
             "این یک نسخه آفلاین است و همگام‌سازی زنده انجام نمی‌شود.",
         "Estimated portfolio value" to "ارزش تقریبی سبد بر اساس آخرین فایل",
