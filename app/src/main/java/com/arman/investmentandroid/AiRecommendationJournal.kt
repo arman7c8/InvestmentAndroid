@@ -68,10 +68,21 @@ class AiRecommendationJournal private constructor(private val file: File) {
     }
 
     private fun mergeRecord(left: JSONObject, right: JSONObject): JSONObject {
-        val rank = mapOf("pending" to 0, "rejected" to 1, "accepted" to 2)
+        val rank = mapOf("pending" to 0, "rejected" to 1, "accepted" to 1)
         val chosen = JSONObject(left.toString())
-        val leftRank = rank[left.optString("status")] ?: -1
-        val rightRank = rank[right.optString("status")] ?: -1
+        val leftStatus = left.optString("status", "pending")
+        val rightStatus = right.optString("status", "pending")
+        if (
+            leftStatus in setOf("accepted", "rejected") &&
+            rightStatus in setOf("accepted", "rejected") &&
+            leftStatus != rightStatus
+        ) {
+            throw JournalException(
+                "AI recommendation decision differs between devices; resolve it before syncing."
+            )
+        }
+        val leftRank = rank[leftStatus] ?: -1
+        val rightRank = rank[rightStatus] ?: -1
         if (rightRank > leftRank) {
             val keys = right.keys()
             while (keys.hasNext()) {
