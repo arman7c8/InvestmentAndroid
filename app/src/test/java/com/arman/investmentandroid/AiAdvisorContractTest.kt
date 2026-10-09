@@ -63,7 +63,7 @@ class AiAdvisorContractTest {
         val privacy = payload.getJSONObject("privacy")
         assertTrue(!privacy.getBoolean("money_included"))
         assertTrue(!privacy.getBoolean("units_included"))
-        assertTrue(!privacy.getBoolean("account_ids_included"))
+        assertTrue(!privacy.getBoolean("financial_ids_included"))
         assertTrue(!privacy.getBoolean("personal_identity_included"))
     }
 
