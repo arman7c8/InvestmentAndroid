@@ -19,6 +19,13 @@ class CoreSnapshotPreviewTest {
             val ids = JSONArray()
             var columns = JSONArray().put("id")
             if (name == "assets") { rows.put(JSONArray().put("btc")); ids.put(1) }
+            if (name == "prices") {
+                columns = JSONArray().put("id").put("asset_id")
+                    .put("price_toman").put("observed_at")
+                rows.put(JSONArray().put("price-1").put("btc")
+                    .put(5_000_000.0).put("2026-10-09T12:00:00"))
+                ids.put(1)
+            }
             if (name == "imported_snapshots") { rows.put(JSONArray().put(1)); ids.put(1) }
             if (name == "opening_positions") {
                 columns = JSONArray().put("snapshot_id").put("asset_id").put("quantity")
@@ -70,6 +77,54 @@ class CoreSnapshotPreviewTest {
         assertEquals(11, preview.tableCount)
         assertEquals(1, preview.holdings.size)
     }
+    @Test fun fabricatedValuationWithCorrectChecksumIsRejected() {
+        val wrapped = sample()
+        val decoded = String(Base64.getDecoder().decode(wrapped.getString("payloadBase64")))
+        val payload = JSONObject(decoded)
+        payload.getJSONObject("preview").getJSONArray("holdings")
+            .getJSONObject(0).put("value_toman", 99_000_000.0)
+        assertThrows(IllegalArgumentException::class.java) {
+            CoreSnapshotPreview.inspect(wrap(payload).toString())
+        }
+    }
+
+    @Test fun nativeQuoteUsesLatestReferencePriceNotHistoricalTomanValue() {
+        val wrapped = sample()
+        val payload = JSONObject(String(Base64.getDecoder().decode(wrapped.getString("payloadBase64"))))
+        val tables = payload.getJSONObject("tables")
+        tables.getJSONObject("prices").apply {
+            put("columns", JSONArray().put("id").put("asset_id")
+                .put("price_toman").put("observed_at")
+                .put("native_price").put("reference_asset_id"))
+            put("rows", JSONArray()
+                .put(JSONArray().put("price-btc").put("btc").put(1_000_000.0)
+                    .put("2026-10-09T12:00:00").put(2.0).put("usdt"))
+                .put(JSONArray().put("usdt-old").put("usdt").put(50_000.0)
+                    .put("2026-10-09T11:00:00").put(JSONObject.NULL).put(JSONObject.NULL))
+                .put(JSONArray().put("usdt-new").put("usdt").put(60_000.0)
+                    .put("2026-10-09T13:00:00").put(JSONObject.NULL).put(JSONObject.NULL)))
+            put("rowids", JSONArray().put(1).put(2).put(3))
+        }
+        tables.getJSONObject("assets").apply {
+            put("rows", JSONArray().put(JSONArray().put("btc")).put(JSONArray().put("usdt")))
+            put("rowids", JSONArray().put(1).put(2))
+        }
+        payload.getJSONObject("preview").apply {
+            put("holdings", JSONArray()
+                .put(JSONObject().put("id", "btc").put("name", "Bitcoin")
+                    .put("quantity", 1.0).put("value_toman", 120_000.0))
+                .put(JSONObject().put("id", "usdt").put("name", "USDT")
+                    .put("quantity", 0.0).put("value_toman", 0.0)))
+        }
+        val valid = CoreSnapshotPreview.inspect(wrap(payload).toString())
+        assertEquals(2, valid.holdings.size)
+        payload.getJSONObject("preview").getJSONArray("holdings")
+            .getJSONObject(0).put("value_toman", 100_000.0)
+        assertThrows(IllegalArgumentException::class.java) {
+            CoreSnapshotPreview.inspect(wrap(payload).toString())
+        }
+    }
+
     @Test fun changedChecksumIsRejected() {
         val bad = sample().put("sha256", "0".repeat(64))
         assertThrows(IllegalArgumentException::class.java) { CoreSnapshotPreview.inspect(bad.toString()) }
@@ -127,7 +182,8 @@ class CoreSnapshotPreviewTest {
         val preview = body.getJSONObject("preview")
         preview.put("transactionCount", 2).put("activeTransactionCount", 1)
             .put("correctionCount", 1).put("voidCount", 1)
-        preview.getJSONArray("holdings").getJSONObject(0).put("quantity", 1.35)
+        preview.getJSONArray("holdings").getJSONObject(0)
+            .put("quantity", 1.35).put("value_toman", 6_750_000.0)
         preview.getJSONArray("cashAccounts").getJSONObject(0)
             .put("balance_toman", 1_300_000.0)
 
