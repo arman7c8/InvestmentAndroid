@@ -348,7 +348,13 @@ class PortfolioSafetyTest {
         val cases = listOf(
             asset(id = "windows:crypto:btc"),
             asset().put("sourcePlatform", "windows-core"),
-            asset().put("sharedId", "windows:crypto:btc")
+            asset().put("sharedId", "windows:crypto:btc"),
+            asset().put("source_platform", "android")
+                .put("sourcePlatform", "windows-core"),
+            asset().put("id", "local:btc")
+                .put("sharedId", "windows:crypto:btc"),
+            asset().put("source_platform", "windows-core")
+                .put("sourcePlatform", "android")
         )
         for (item in cases) {
             val portfolio = JSONObject().put("assets", JSONArray().put(item))

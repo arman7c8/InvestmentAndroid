@@ -16,6 +16,7 @@ object CoreLedgerParity {
         private val data = tables.getJSONObject(name)
         private val columns = data.getJSONArray("columns")
         private val rows = data.getJSONArray("rows")
+        private val rowids = data.getJSONArray("rowids")
         private val lookup = (0 until columns.length()).associateBy { columns.getString(it) }
 
         fun records(): List<JSONObject> = (0 until rows.length()).map { index ->
@@ -24,6 +25,9 @@ object CoreLedgerParity {
                 for ((name, column) in lookup) put(name, row.get(column))
             }
         }
+
+        fun recordsWithRowids(): List<Pair<Long, JSONObject>> =
+            records().mapIndexed { index, row -> rowids.getLong(index) to row }
     }
 
     private fun string(item: JSONObject, name: String): String =
@@ -117,6 +121,55 @@ object CoreLedgerParity {
             val computed = quantities[id] ?: 0.0
             require(sameNumber(computed, finite(item, "quantity"))) {
                 "Core holding quantity differs from ledger: $id."
+            }
+        }
+
+        // Validate the market-price projection independently, including
+        // native USDT quotes repriced with the latest reference asset.
+        // A valid SHA alone does not prove the displayed valuation is correct.
+        val latestQuotes = linkedMapOf<String, JSONObject>()
+        val prices = Table(tables, "prices").recordsWithRowids()
+        prices.sortedWith(
+            compareBy<Pair<Long, JSONObject>> { string(it.second, "observed_at") }
+                .thenBy { it.first }
+        ).forEach { (_, row) ->
+            val id = string(row, "asset_id")
+            require(id in assetIds) { "Price record has an unknown Core asset." }
+            latestQuotes[id] = row
+        }
+
+        fun currentPrice(assetId: String, seen: Set<String> = emptySet()): Double? {
+            require(assetId !in seen) { "Circular Core FX reference." }
+            val quote = latestQuotes[assetId] ?: return null
+            val native = if (!quote.has("native_price") || quote.isNull("native_price")) null
+                else finite(quote, "native_price")
+            val result = if (native != null) {
+                val reference = string(quote, "reference_asset_id")
+                if (reference.isBlank()) return null
+                require(reference in assetIds) { "Unknown Core FX reference." }
+                val rate = currentPrice(reference, seen + assetId) ?: return null
+                native * rate
+            } else finite(quote, "price_toman")
+            require(result.isFinite() && result > 0.0) { "Invalid current Core quote." }
+            return result
+        }
+
+        for (index in 0 until holdings.length()) {
+            val item = holdings.getJSONObject(index)
+            val id = string(item, "id")
+            val quote = currentPrice(id)
+            if (quote == null) {
+                require(!item.has("value_toman") || item.isNull("value_toman")) {
+                    "Unpriced Core holding has a fabricated value: $id."
+                }
+            } else {
+                val quantity = quantities[id] ?: 0.0
+                val expectedValue = quantity * quote
+                require(expectedValue.isFinite() &&
+                    !item.isNull("value_toman") &&
+                    sameNumber(expectedValue, finite(item, "value_toman"))) {
+                    "Core holding valuation differs from current price/FX ledger: $id."
+                }
             }
         }
 

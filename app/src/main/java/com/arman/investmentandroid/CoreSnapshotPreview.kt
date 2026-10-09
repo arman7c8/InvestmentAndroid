@@ -107,9 +107,22 @@ object CoreSnapshotPreview {
             require(rows.length() == rowids.length()) { "Row identity mismatch in " + name }
             totalRows += rows.length()
             require(totalRows <= 200_000) { "Too many Core records for preview." }
+            var previousRowId: Long? = null
             for (i in 0 until rows.length()) {
-                require(rows.getJSONArray(i).length() == columns.length()) { "Invalid row width in " + name }
-                require(rowids.get(i) is Number) { "Invalid row identity in " + name }
+                require(rows.getJSONArray(i).length() == columns.length()) {
+                    "Invalid row width in " + name
+                }
+                val identity = rowids.get(i)
+                require(identity is Int || identity is Long) {
+                    "Invalid SQLite rowid type in " + name
+                }
+                val rowid = (identity as Number).toLong()
+                previousRowId?.let { previous ->
+                    require(rowid > previous) {
+                        "Core table rowids must be unique and ordered: " + name
+                    }
+                }
+                previousRowId = rowid
             }
             count++
         }
