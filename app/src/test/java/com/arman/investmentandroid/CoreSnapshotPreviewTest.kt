@@ -125,6 +125,39 @@ class CoreSnapshotPreviewTest {
         }
     }
 
+    @Test fun sameTimestampLatestPriceUsesSqliteRowidNotLexicalPriceId() {
+        val sample = sample()
+        val payload = JSONObject(String(Base64.getDecoder().decode(sample.getString("payloadBase64"))))
+        val prices = payload.getJSONObject("tables").getJSONObject("prices")
+        prices.getJSONArray("rows").put(JSONArray()
+            .put("a-later").put("btc").put(1_250_000.0).put("2026-10-09T12:00:00"))
+        prices.getJSONArray("rowids").put(2)
+        payload.getJSONObject("preview").getJSONArray("holdings")
+            .getJSONObject(0).put("value_toman", 1_250_000.0)
+        assertEquals(1, CoreSnapshotPreview.inspect(wrap(payload).toString()).holdings.size)
+        payload.getJSONObject("preview").getJSONArray("holdings")
+            .getJSONObject(0).put("value_toman", 5_000_000.0)
+        assertThrows(IllegalArgumentException::class.java) {
+            CoreSnapshotPreview.inspect(wrap(payload).toString())
+        }
+    }
+
+    @Test fun duplicateOrUnorderedSqliteRowidsFailBeforePreview() {
+        val sample = sample()
+        val payload = JSONObject(String(Base64.getDecoder().decode(sample.getString("payloadBase64"))))
+        val prices = payload.getJSONObject("tables").getJSONObject("prices")
+        prices.getJSONArray("rows").put(JSONArray()
+            .put("second").put("btc").put(5_000_000.0).put("2026-10-09T12:00:00"))
+        prices.put("rowids", JSONArray().put(2).put(1))
+        assertThrows(IllegalArgumentException::class.java) {
+            CoreSnapshotPreview.inspect(wrap(payload).toString())
+        }
+        prices.put("rowids", JSONArray().put(1).put(1))
+        assertThrows(IllegalArgumentException::class.java) {
+            CoreSnapshotPreview.inspect(wrap(payload).toString())
+        }
+    }
+
     @Test fun changedChecksumIsRejected() {
         val bad = sample().put("sha256", "0".repeat(64))
         assertThrows(IllegalArgumentException::class.java) { CoreSnapshotPreview.inspect(bad.toString()) }
