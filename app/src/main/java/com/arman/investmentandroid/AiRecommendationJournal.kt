@@ -62,6 +62,86 @@ class AiRecommendationJournal private constructor(private val file: File) {
         }
     }
 
+    fun exportDocument(): JSONObject {
+        val root = loadRoot()
+        return JSONObject(root.toString())
+    }
+
+    private fun mergeRecord(left: JSONObject, right: JSONObject): JSONObject {
+        val rank = mapOf("pending" to 0, "rejected" to 1, "accepted" to 2)
+        val chosen = JSONObject(left.toString())
+        val leftRank = rank[left.optString("status")] ?: -1
+        val rightRank = rank[right.optString("status")] ?: -1
+        if (rightRank > leftRank) {
+            val keys = right.keys()
+            while (keys.hasNext()) {
+                val key = keys.next()
+                chosen.put(key, right.get(key))
+            }
+        } else {
+            val keys = right.keys()
+            while (keys.hasNext()) {
+                val key = keys.next()
+                if (!chosen.has(key) || chosen.isNull(key)) {
+                    chosen.put(key, right.get(key))
+                }
+            }
+        }
+
+        val rightOutcome = right.optJSONObject("outcome")
+        if (rightOutcome != null) {
+            val mergedOutcome = chosen.optJSONObject("outcome")
+                ?.let { JSONObject(it.toString()) }
+                ?: JSONObject()
+            val keys = rightOutcome.keys()
+            while (keys.hasNext()) {
+                val key = keys.next()
+                if (!rightOutcome.isNull(key)) mergedOutcome.put(key, rightOutcome.get(key))
+            }
+            chosen.put("outcome", mergedOutcome)
+        }
+        if (chosen.optString("decision_at").isBlank() && right.optString("decision_at").isNotBlank()) {
+            chosen.put("decision_at", right.optString("decision_at"))
+        }
+        return chosen
+    }
+
+    fun mergeDocument(remote: JSONObject?): JSONObject {
+        if (remote == null) return exportDocument()
+        if (
+            remote.optString("format") != FORMAT ||
+            remote.optInt("schema_version", -1) != SCHEMA_VERSION ||
+            remote.optJSONArray("records") == null
+        ) {
+            throw JournalException("Remote AI recommendation journal format is invalid.")
+        }
+
+        val localRecords = loadRoot().getJSONArray("records")
+        val remoteRecords = remote.getJSONArray("records")
+        val merged = linkedMapOf<String, JSONObject>()
+
+        fun absorb(records: JSONArray) {
+            for (index in 0 until records.length()) {
+                val record = records.optJSONObject(index) ?: continue
+                val id = record.optString("recommendation_id")
+                if (id.isBlank()) continue
+                merged[id] = merged[id]?.let { mergeRecord(it, record) }
+                    ?: JSONObject(record.toString())
+            }
+        }
+
+        absorb(remoteRecords)
+        absorb(localRecords)
+
+        val values = merged.values.toList().takeLast(MAX_RECORDS)
+        val result = JSONObject()
+            .put("format", FORMAT)
+            .put("schema_version", SCHEMA_VERSION)
+            .put("records", JSONArray(values))
+        saveRoot(result)
+        return JSONObject(result.toString())
+    }
+
     fun listRecords(): List<JSONObject> {
         val records = loadRoot().getJSONArray("records")
         val result = mutableListOf<JSONObject>()
