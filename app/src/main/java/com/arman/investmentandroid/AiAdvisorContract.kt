@@ -86,8 +86,8 @@ object AiAdvisorContract {
         val rows = JSONArray()
         allocations.forEachIndexed { index, item ->
             val scope = item.scope.lowercase(Locale.US)
-            if (scope != "group" && scope != "asset") {
-                throw ContractException("Allocation scope must be group or asset.")
+            if (scope != "group" && scope != "asset" && scope != "portfolio_asset") {
+                throw ContractException("Allocation scope must be group, asset, or portfolio_asset.")
             }
             val row = JSONObject()
                 .put("scope", scope)
