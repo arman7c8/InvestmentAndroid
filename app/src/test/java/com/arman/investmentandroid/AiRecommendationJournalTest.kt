@@ -1,13 +1,12 @@
 package com.arman.investmentandroid
 
-import android.content.Context
-import androidx.test.core.app.ApplicationProvider
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.json.JSONArray
 import org.json.JSONObject
 import java.time.Instant
+import java.nio.file.Files
 
 class AiRecommendationJournalTest {
     private fun recommendation(): JSONObject = JSONObject()
@@ -25,9 +24,8 @@ class AiRecommendationJournalTest {
 
     @Test
     fun lifecycleProducesCompactHistory() {
-        val context = ApplicationProvider.getApplicationContext<Context>()
-        context.noBackupFilesDir.resolve("ai-recommendation-journal.json").delete()
-        val journal = AiRecommendationJournal(context)
+        val folder = Files.createTempDirectory("investment-ai-journal")
+        val journal = AiRecommendationJournal(folder.resolve("journal.json").toString())
         val snapshot = AiAdvisorContract.buildSnapshot(
             allocations = listOf(
                 AiAdvisorContract.Allocation("portfolio_asset","BTC",60.0,60.0),
