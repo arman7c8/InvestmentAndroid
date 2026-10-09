@@ -43,4 +43,34 @@ class AiRecommendationJournalTest {
         assertEquals(3.4, compact.last().outcomePct ?: 0.0, 0.000001)
         assertEquals(8, compact.last().ageDays)
     }
+    @Test
+    fun pendingRecommendationIsNotLearningHistory() {
+        val folder = Files.createTempDirectory("investment-ai-journal-pending")
+        val journal = AiRecommendationJournal(folder.resolve("journal.json").toString())
+        val snapshot = AiAdvisorContract.buildSnapshot(
+            allocations = listOf(
+                AiAdvisorContract.Allocation("portfolio_asset","BTC",100.0,100.0)
+            ),
+            generatedAt = "2026-10-09T12:00:00Z"
+        )
+        val rec = recommendation()
+        rec.put(
+            "suggested_targets",
+            JSONArray().put(
+                JSONObject()
+                    .put("scope","portfolio_asset")
+                    .put("public_key","BTC")
+                    .put("current_pct",100)
+                    .put("suggested_pct",100)
+                    .put("reason","Hold")
+            )
+        )
+        journal.recordRecommendation(
+            snapshot, rec, "model-a", Instant.parse("2026-10-09T12:00:00Z")
+        )
+        assertTrue(
+            journal.compactHistory(Instant.parse("2026-10-10T12:00:00Z")).isEmpty()
+        )
+    }
+
 }
