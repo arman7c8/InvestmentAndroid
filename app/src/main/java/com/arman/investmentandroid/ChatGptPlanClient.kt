@@ -425,7 +425,7 @@ class ChatGptPlanClient(private val context: Context) {
                 .put("stream", true)
         )
 
-    fun analyzeSnapshot(snapshot: JSONObject, model: String): String {
+    fun analyzeSnapshot(snapshot: JSONObject, model: String): JSONObject {
         AiAdvisorContract.assertSnapshotSafe(snapshot)
         return streamResponse(
             JSONObject()
@@ -435,7 +435,7 @@ class ChatGptPlanClient(private val context: Context) {
                     "You are the Investment AI Advisor. Analyze only the supplied percentage-based " +
                         "portfolio snapshot and optional Atlas public market context. Never request " +
                         "or infer monetary values, balances, account identity, or credentials. " +
-                        "Target changes are recommendations only and require explicit user approval."
+                        "Target changes are recommendations only and require explicit user approval. " +\n                        AiAdvisorRecommendation.promptContract()
                 )
                 .put("input", JSONArray().put(
                     JSONObject().put("role", "user").put("content", snapshot.toString())
