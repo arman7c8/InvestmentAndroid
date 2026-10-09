@@ -463,7 +463,21 @@ class ChatGptPlanClient(private val context: Context) {
             it.write(payload.toString().toByteArray(StandardCharsets.UTF_8))
         }
         if (connection.responseCode != 200) {
+            val statusCode = connection.responseCode
+            val errorBody = try { readJson(connection, "request") } catch (_: Exception) { null }
+            val code = errorBody?.optJSONObject("error")?.optString("code", "") ?: ""
             connection.disconnect()
+            if (code == "subscription_sharing_user_not_eligible" || statusCode == 403) {
+                throw PlanException(
+                    "ChatGPT plan usage is not available for this account, workspace, or current policy."
+                )
+            }
+            if (statusCode == 401) {
+                throw PlanException("ChatGPT did not accept the saved authorization. Reconnect ChatGPT.")
+            }
+            if (statusCode == 503) {
+                throw PlanException("ChatGPT plan routing is temporarily unavailable. Retry later.")
+            }
             throw PlanException("The ChatGPT plan request was not accepted.")
         }
         val output = StringBuilder()
@@ -492,6 +506,9 @@ class ChatGptPlanClient(private val context: Context) {
                         }
                         throw PlanException("The ChatGPT request failed during inference.")
                     }
+                    "response.incomplete" -> throw PlanException(
+                        "The ChatGPT response was incomplete; no recommendation was accepted."
+                    )
                     "response.completed" -> completed = true
                 }
             }
