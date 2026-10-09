@@ -61,9 +61,9 @@ class AiAdvisorContractTest {
             generatedAt = "2026-10-09T12:00:00Z"
         )
         val privacy = payload.getJSONObject("privacy")
-        assertTrue(!privacy.getBoolean("monetary_values_included"))
-        assertTrue(!privacy.getBoolean("quantities_included"))
-        assertTrue(!privacy.getBoolean("account_identifiers_included"))
+        assertTrue(!privacy.getBoolean("money_included"))
+        assertTrue(!privacy.getBoolean("units_included"))
+        assertTrue(!privacy.getBoolean("account_ids_included"))
         assertTrue(!privacy.getBoolean("personal_identity_included"))
     }
 
