@@ -57,6 +57,7 @@ class CoreSnapshotPreviewTest {
         assertEquals("98,741.3", CoreSnapshotPreview.formatMoneyForDisplay(98_741.30000000075))
         assertEquals("379.439", CoreSnapshotPreview.formatQuantityForDisplay(379.439))
         assertEquals("0.00000001", CoreSnapshotPreview.formatQuantityForDisplay(0.00000001))
+        assertEquals("0.000000000000000000000001", CoreSnapshotPreview.formatQuantityForDisplay(1e-24))
         val summary = CoreSnapshotPreview.inspect(sample().toString()).display(false)
         org.junit.Assert.assertTrue(summary.contains("5,000,000 Toman"))
         org.junit.Assert.assertTrue(summary.contains("1,500,000 Toman"))
