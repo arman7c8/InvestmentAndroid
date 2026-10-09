@@ -5504,13 +5504,16 @@ class MainActivity : Activity() {
                             },
                             onSuccess = {
                                 try {
-                                    coreFinancialJournal.clearAfterVerifiedExport(request)
-                                    if (pendingCoreFinancialProposalJson == request) {
-                                        pendingCoreFinancialProposalJson = null
+                                    // Exporting a JSON file is NOT confirmation that
+                                    // Windows accepted or applied the financial event.
+                                    // Retain the identical UUID until explicit discard
+                                    // (future: until a verified receipt is received).
+                                    check(coreFinancialJournal.load() == request) {
+                                        "Financial request journal changed during export."
                                     }
                                     Toast.makeText(
                                         this,
-                                        ui("Financial request saved; no financial data changed."),
+                                        ui("Financial request file saved. Operation ID remains pending; no trade was applied."),
                                         Toast.LENGTH_LONG
                                     ).show()
                                 } catch (error: Exception) {

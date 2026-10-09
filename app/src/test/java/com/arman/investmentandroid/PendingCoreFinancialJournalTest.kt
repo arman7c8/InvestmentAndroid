@@ -76,28 +76,28 @@ class PendingCoreFinancialJournalTest {
         assertNull(journal.load())
     }
 
-    @Test fun onlyExactlyMatchingVerifiedExportCanClearJournal() {
+    @Test fun exportingFileDoesNotClearTheRequestOrRegenerateUuid() {
         val storage = MemoryStorage()
         val journal = PendingCoreFinancialJournal(storage)
-        val old = journal.save(request())
-        assertThrows(IllegalStateException::class.java) {
-            journal.clearAfterVerifiedExport(request("b4fe659e-5d9d-48e6-8c36-9a591f985a1a"))
-        }
-        assertEquals(old, journal.load())
-        journal.clearAfterVerifiedExport(old)
-        assertNull(PendingCoreFinancialJournal(storage).load())
+        val previous = journal.save(request())
+        // The document picker can export multiple identical copies. A copy is
+        // NOT an authenticated Windows receipt, so the UUID stays pending.
+        val exportCopy = journal.load()
+        assertEquals(previous, exportCopy)
+        assertEquals(previous, journal.save(exportCopy!!))
+        assertEquals(previous, PendingCoreFinancialJournal(storage).load())
     }
 
-    @Test fun failureToEraseIsDetectedWithoutMisleadingSuccess() {
+    @Test fun failureToDiscardIsDetectedWithoutMisleadingSuccess() {
         val storage = MemoryStorage()
         val journal = PendingCoreFinancialJournal(storage)
-        val old = journal.save(request())
+        val previous = journal.save(request())
         storage.ignoreClear = true
         val ex = assertThrows(IllegalStateException::class.java) {
-            journal.clearAfterVerifiedExport(old)
+            journal.discardByUser()
         }
-        assertTrue(ex.message!!.contains("could not be cleared"))
-        assertEquals(old, journal.load())
+        assertTrue(ex.message!!.contains("Could not discard"))
+        assertEquals(previous, journal.load())
     }
 
     @Test fun differentOperationAllowedOnlyAfterExplicitDiscard() {

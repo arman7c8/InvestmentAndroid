@@ -43,6 +43,8 @@ object UiText {
         "Saving Windows financial request" to "ذخیره درخواست مالی ویندوز",
         "Financial request saved; no financial data changed." to
             "درخواست مالی ذخیره شد؛ اطلاعات اصلی تغییری نکرد.",
+        "Financial request file saved. Operation ID remains pending; no trade was applied." to
+            "فایل درخواست مالی ذخیره شد. شناسه درخواست برای پیگیری محفوظ است؛ هیچ معامله‌ای ثبت نشده است.",
         "Pending financial request" to "درخواست مالی ذخیره‌نشده",
         "The previous request was not confirmed saved. Retry with the same ID or discard it. No transaction was executed." to
             "ذخیره درخواست قبلی تأیید نشده است. می‌توانید با همان شناسه دوباره تلاش کنید یا صریحاً کنار بگذارید. هیچ تراکنشی ثبت نشده است.",

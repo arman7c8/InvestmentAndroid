@@ -35,15 +35,6 @@ class PendingCoreFinancialJournal(private val storage: Storage) {
         check(storage.read() == null) { "Could not discard the pending financial request." }
     }
 
-    /** Confirm the same exact JSON was exported before clearing the local journal. */
-    fun clearAfterVerifiedExport(raw: String) {
-        val current = load()
-        check(current == raw) {
-            "Financial request changed while its document was being saved."
-        }
-        storage.clear()
-        check(storage.read() == null) {
-            "Export succeeded, but financial request journal could not be cleared."
-        }
-    }
+    // Export-to-file is not a server receipt; only explicit user discard can
+    // remove the draft until authenticated Windows receipt handling exists.
 }
