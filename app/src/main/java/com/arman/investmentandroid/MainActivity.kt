@@ -128,6 +128,8 @@ class MainActivity : Activity() {
     private val cloudSyncHandler = Handler(Looper.getMainLooper())
     private var cloudSyncRunnable: Runnable? = null
     private val cloudExecutor = Executors.newSingleThreadExecutor()
+    private val aiExecutor = Executors.newSingleThreadExecutor()
+    private val chatGptPlanClient by lazy { ChatGptPlanClient(this) }
     private val cloudOperationInProgress = AtomicBoolean(false)
     private val priceUpdateInProgress = AtomicBoolean(false)
 
@@ -192,6 +194,7 @@ class MainActivity : Activity() {
         stopAutoRefresh()
         stopSmartCloudSync()
         cloudExecutor.shutdownNow()
+        aiExecutor.shutdownNow()
         super.onDestroy()
     }
 
@@ -2243,6 +2246,122 @@ class MainActivity : Activity() {
             summaryPeriods.indexOf(loadSummaryPeriod()).let { if (it >= 0) it else 2 }
         )
         form.addView(periodSpinner)
+
+        addLabel("AI Advisor · ChatGPT")
+        val aiStatus = TextView(this).apply {
+            text = ui(
+                if (chatGptPlanClient.isConnected())
+                    "Connected · ChatGPT plan"
+                else
+                    "Not connected"
+            )
+            textSize = 13f
+            setTextColor(Color.DKGRAY)
+            setPadding(0, dp(2), 0, dp(6))
+        }
+        form.addView(aiStatus)
+
+        val aiButtons = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+        }
+        val aiConnectButton = Button(this).apply {
+            text = ui(
+                if (chatGptPlanClient.isConnected())
+                    "Test ChatGPT"
+                else
+                    "Continue with ChatGPT"
+            )
+        }
+        val aiDisconnectButton = Button(this).apply {
+            text = ui("Disconnect")
+            visibility = if (chatGptPlanClient.isConnected()) View.VISIBLE else View.GONE
+        }
+        aiButtons.addView(aiConnectButton)
+        aiButtons.addView(aiDisconnectButton)
+        form.addView(aiButtons)
+
+        fun refreshAiControls(message: String? = null) {
+            val connected = chatGptPlanClient.isConnected()
+            aiStatus.text = ui(
+                message ?: if (connected)
+                    "Connected · ChatGPT plan"
+                else
+                    "Not connected"
+            )
+            aiConnectButton.text = ui(
+                if (connected) "Test ChatGPT" else "Continue with ChatGPT"
+            )
+            aiDisconnectButton.visibility = if (connected) View.VISIBLE else View.GONE
+            aiConnectButton.isEnabled = true
+            aiDisconnectButton.isEnabled = true
+        }
+
+        aiConnectButton.setOnClickListener {
+            aiConnectButton.isEnabled = false
+            aiDisconnectButton.isEnabled = false
+            if (!chatGptPlanClient.isConnected()) {
+                aiStatus.text = ui("Complete ChatGPT sign-in in your browser…")
+                chatGptPlanClient.authorize(
+                    this,
+                    aiExecutor,
+                    java.util.concurrent.Executor { command -> runOnUiThread(command) }
+                ) { result ->
+                    result.onSuccess { connected ->
+                        val firstModel = connected.models.firstOrNull()
+                        if (firstModel == null) {
+                            refreshAiControls("Connected, but no ChatGPT plan model is available.")
+                        } else {
+                            aiStatus.text = ui("Connected · testing ChatGPT plan…")
+                            aiExecutor.execute {
+                                val probe = runCatching {
+                                    chatGptPlanClient.testConnection(firstModel.slug)
+                                }
+                                runOnUiThread {
+                                    probe.onSuccess {
+                                        refreshAiControls("Connected ✓ · AI test passed")
+                                    }.onFailure { error ->
+                                        refreshAiControls(
+                                            error.message ?: "ChatGPT connection test failed."
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }.onFailure { error ->
+                        refreshAiControls(
+                            error.message ?: "ChatGPT connection failed. Retry sign-in."
+                        )
+                    }
+                }
+            } else {
+                aiStatus.text = ui("Testing ChatGPT plan connection…")
+                aiExecutor.execute {
+                    val probe = runCatching {
+                        val model = chatGptPlanClient.availableModels().first()
+                        chatGptPlanClient.testConnection(model.slug)
+                    }
+                    runOnUiThread {
+                        probe.onSuccess {
+                            refreshAiControls("Connected ✓ · AI test passed")
+                        }.onFailure { error ->
+                            refreshAiControls(
+                                error.message ?: "ChatGPT connection test failed."
+                            )
+                        }
+                    }
+                }
+            }
+        }
+
+        aiDisconnectButton.setOnClickListener {
+            chatGptPlanClient.disconnect()
+            refreshAiControls()
+            Toast.makeText(
+                this,
+                ui("ChatGPT disconnected from Investment."),
+                Toast.LENGTH_SHORT
+            ).show()
+        }
 
         addLabel("Automatic Nobitex refresh while app is open")
         val refreshSpinner = Spinner(this)
