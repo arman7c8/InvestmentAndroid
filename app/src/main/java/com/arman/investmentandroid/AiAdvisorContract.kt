@@ -126,7 +126,7 @@ object AiAdvisorContract {
         val privacy = JSONObject()
             .put("money_included", false)
             .put("units_included", false)
-            .put("account_ids_included", false)
+            .put("financial_ids_included", false)
             .put("personal_identity_included", false)
 
         val payload = JSONObject()
@@ -181,7 +181,7 @@ object AiAdvisorContract {
         val flags = listOf(
             "money_included",
             "units_included",
-            "account_ids_included",
+            "financial_ids_included",
             "personal_identity_included"
         )
         if (flags.any { privacy.optBoolean(it, true) }) {
