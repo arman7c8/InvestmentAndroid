@@ -119,6 +119,10 @@ class MainActivity : Activity() {
     private var pendingCorePolicyProposalJson: String? = null
     private val coreFinancialProposalSaveRequestCode = 1007
     private var pendingCoreFinancialProposalJson: String? = null
+    private var pendingCoreFinancialJournalError = false
+    private val coreFinancialJournal by lazy {
+        PendingCoreFinancialJournal(AndroidCoreFinancialJournalStorage(this))
+    }
     private val createCloudBackupRequestCode = 1003
     private val connectCloudBackupRequestCode = 1004
     private val coreCategories = listOf("Cash", "Gold", "Stocks", "Crypto", "Fund", "Other")
@@ -183,9 +187,13 @@ class MainActivity : Activity() {
         window.decorView.layoutDirection =
             if (uiLanguage() == "fa") View.LAYOUT_DIRECTION_RTL else View.LAYOUT_DIRECTION_LTR
         ensureSeedData()
-        pendingCoreFinancialProposalJson = PendingCoreFinancialRequest.restore(
-            savedInstanceState?.getString(PendingCoreFinancialRequest.STATE_KEY)
-        )
+        try {
+            // The on-device journal, not transient Activity state, is authoritative.
+            pendingCoreFinancialProposalJson = coreFinancialJournal.load()
+        } catch (_: Exception) {
+            pendingCoreFinancialJournalError = true
+            pendingCoreFinancialProposalJson = null
+        }
 
         when (StartupScreen.destination(
             lockEnabled = isAppLockEnabled(),
@@ -203,9 +211,8 @@ class MainActivity : Activity() {
     override fun onSaveInstanceState(outState: Bundle) {
         outState.putBoolean("portfolio_screen", onPortfolioScreen)
         outState.putBoolean("price_center_screen", onPriceCenterScreen)
-        PendingCoreFinancialRequest.restore(pendingCoreFinancialProposalJson)?.let {
-            outState.putString(PendingCoreFinancialRequest.STATE_KEY, it)
-        }
+        // Do not copy transaction requests into Android's saved-state Bundle.
+        // They are stored in private, non-backed-up atomic app storage.
         super.onSaveInstanceState(outState)
     }
 
@@ -4838,6 +4845,32 @@ class MainActivity : Activity() {
     }
 
     private fun chooseCoreFinancialRequest(snapshot: CoreSnapshotPreview.Summary) {
+        try {
+            pendingCoreFinancialProposalJson = coreFinancialJournal.load()
+            pendingCoreFinancialJournalError = false
+        } catch (_: Exception) {
+            pendingCoreFinancialJournalError = true
+        }
+        if (pendingCoreFinancialJournalError) {
+            AlertDialog.Builder(this)
+                .setTitle(ui("Unreadable pending financial request"))
+                .setMessage(ui(
+                    "A previously prepared financial request could not be verified. No new request may be created until you explicitly discard the damaged local draft. Nothing was applied."
+                ))
+                .setPositiveButton(ui("Discard damaged draft")) { _, _ ->
+                    try {
+                        coreFinancialJournal.discardByUser()
+                        pendingCoreFinancialProposalJson = null
+                        pendingCoreFinancialJournalError = false
+                        showCoreFinancialCommandTypes(snapshot)
+                    } catch (error: Exception) {
+                        showBackupFileError(error)
+                    }
+                }
+                .setNegativeButton(ui("Cancel"), null)
+                .show()
+            return
+        }
         if (PendingCoreFinancialRequest.restore(pendingCoreFinancialProposalJson) != null) {
             AlertDialog.Builder(this)
                 .setTitle(ui("Pending financial request"))
@@ -4848,8 +4881,13 @@ class MainActivity : Activity() {
                     launchPendingCoreFinancialExport()
                 }
                 .setNeutralButton(ui("Discard and create a new request")) { _, _ ->
-                    pendingCoreFinancialProposalJson = null
-                    showCoreFinancialCommandTypes(snapshot)
+                    try {
+                        coreFinancialJournal.discardByUser()
+                        pendingCoreFinancialProposalJson = null
+                        showCoreFinancialCommandTypes(snapshot)
+                    } catch (error: Exception) {
+                        showBackupFileError(error)
+                    }
                 }
                 .setNegativeButton(ui("Cancel"), null)
                 .show()
@@ -4964,7 +5002,7 @@ class MainActivity : Activity() {
                     return@setOnClickListener
                 }
                 try {
-                    pendingCoreFinancialProposalJson = CoreFinancialProposal.create(
+                    val generatedRequest = CoreFinancialProposal.create(
                         snapshot,
                         CoreFinancialProposal.Command(
                             type = kind,
@@ -4977,9 +5015,19 @@ class MainActivity : Activity() {
                             }
                         )
                     )
+                    // Persist and verify before the file picker opens. A failed
+                    // write must not permit a silently regenerated UUID.
+                    pendingCoreFinancialProposalJson = coreFinancialJournal.save(generatedRequest)
                     dialog.dismiss()
                     launchPendingCoreFinancialExport()
                 } catch (error: Exception) {
+                    // A disk write could have succeeded even if readback failed.
+                    // Re-check journal before permitting any different request.
+                    try {
+                        pendingCoreFinancialProposalJson = coreFinancialJournal.load()
+                    } catch (_: Exception) {
+                        pendingCoreFinancialJournalError = true
+                    }
                     Toast.makeText(
                         this, ui(error.message ?: "Invalid financial proposal."),
                         Toast.LENGTH_LONG
@@ -5455,14 +5503,19 @@ class MainActivity : Activity() {
                                 )
                             },
                             onSuccess = {
-                                if (pendingCoreFinancialProposalJson == request) {
-                                    pendingCoreFinancialProposalJson = null
+                                try {
+                                    coreFinancialJournal.clearAfterVerifiedExport(request)
+                                    if (pendingCoreFinancialProposalJson == request) {
+                                        pendingCoreFinancialProposalJson = null
+                                    }
+                                    Toast.makeText(
+                                        this,
+                                        ui("Financial request saved; no financial data changed."),
+                                        Toast.LENGTH_LONG
+                                    ).show()
+                                } catch (error: Exception) {
+                                    showBackupFileError(error)
                                 }
-                                Toast.makeText(
-                                    this,
-                                    ui("Financial request saved; no financial data changed."),
-                                    Toast.LENGTH_LONG
-                                ).show()
                             },
                             onFailure = { error ->
                                 // Keep exactly the same UUID and JSON for a later retry.

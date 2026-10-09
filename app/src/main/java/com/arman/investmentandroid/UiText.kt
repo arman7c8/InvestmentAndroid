@@ -48,6 +48,10 @@ object UiText {
             "ذخیره درخواست قبلی تأیید نشده است. می‌توانید با همان شناسه دوباره تلاش کنید یا صریحاً کنار بگذارید. هیچ تراکنشی ثبت نشده است.",
         "Retry same financial request" to "تلاش دوباره با همان درخواست",
         "Discard and create a new request" to "کنارگذاشتن و ایجاد درخواست جدید",
+        "Unreadable pending financial request" to "درخواست مالی ذخیره‌شده غیرقابل‌خواندن است",
+        "A previously prepared financial request could not be verified. No new request may be created until you explicitly discard the damaged local draft. Nothing was applied." to
+            "درخواست مالی قبلی قابل تأیید نیست. تا زمانی که درخواست آسیب‌دیده را صریحاً کنار نگذارید، درخواست جدید ساخته نمی‌شود. هیچ تراکنشی ثبت نشده است.",
+        "Discard damaged draft" to "کنارگذاشتن درخواست آسیب‌دیده",
 
         "View Windows Core Snapshot (Read-only)" to "پیش‌نمایش فقط‌خواندنی دادهٔ ویندوز",
         "Windows Core Preview (Read-only)" to "پیش‌نمایش فقط‌خواندنی ویندوز",
