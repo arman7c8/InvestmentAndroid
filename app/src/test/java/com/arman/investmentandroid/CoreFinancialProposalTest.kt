@@ -196,6 +196,13 @@ class CoreFinancialProposalTest {
             result.getJSONObject("transaction").getDouble("amountToman"), 1e-10)
     }
 
+    @Test fun uppercaseUuidCannotBypassCanonicalIdentityRequirement() {
+        val uppercase = "ACA79A52-64B4-4279-B70D-4412B90F8872"
+        assertThrows(IllegalArgumentException::class.java) {
+            CoreFinancialProposal.create(snapshot(), command("deposit"), uppercase)
+        }
+    }
+
     @Test fun proposalRejectsNonUuidIdentity() {
         assertThrows(IllegalArgumentException::class.java) {
             CoreFinancialProposal.create(snapshot(), command("deposit"), "not-a-uuid")

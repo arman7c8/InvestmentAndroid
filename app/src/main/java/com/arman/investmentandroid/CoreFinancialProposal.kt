@@ -57,7 +57,7 @@ object CoreFinancialProposal {
         require(snapshot.policy != null && Regex("[0-9a-f]{64}").matches(snapshot.sha)) {
             "A verified Windows Core v2 snapshot is required."
         }
-        require(UUID.fromString(operationId).toString() == operationId.lowercase()) {
+        require(UUID.fromString(operationId).toString() == operationId) {
             "Invalid proposal operation ID."
         }
         val cash = snapshot.cashBalances.associate { it.id to it.balanceToman }
