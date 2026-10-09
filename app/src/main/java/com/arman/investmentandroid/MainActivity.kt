@@ -4784,6 +4784,11 @@ class MainActivity : Activity() {
                             false  // Report a conflict rather than crashing the UI callback.
                         }
                         if (historyMatches) {
+                            runCatching {
+                                aiRecommendationJournal.mergeDocument(
+                                    JSONObject(result.raw).optJSONObject("aiJournal")
+                                )
+                            }
                             saveCloudBaseline(result.remote)
                             markCloudSync()
                         } else {
@@ -4973,19 +4978,17 @@ class MainActivity : Activity() {
                             val historyMatches = PortfolioSafety.historyEquivalent(
                                 buildAndroidBackupPayload(), validated.androidPayload
                             )
-                            return@runStorageOperation if (historyMatches) {
-                                CloudSyncResult(
-                                    action = CloudSyncAction.MATCH,
-                                    remote = remoteShared
-                                )
-                            } else {
-                                CloudSyncResult(
+                            if (!historyMatches) {
+                                return@runStorageOperation CloudSyncResult(
                                     action = CloudSyncAction.CONFLICT,
                                     local = localShared,
                                     remote = remoteShared,
                                     historyOnly = true
                                 )
                             }
+                            // Holdings/history match. Fall through to a revision-safe
+                            // write so the independently mergeable AI journal is synced.
+                            Unit
                         }
                         PortfolioSafety.SyncDecision.LOAD_REMOTE ->
                             return@runStorageOperation CloudSyncResult(
