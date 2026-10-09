@@ -73,4 +73,64 @@ class AiRecommendationJournalTest {
         )
     }
 
+    @Test
+    fun mergePreservesBothDeviceRecords() {
+        val folder = Files.createTempDirectory("investment-ai-journal-merge")
+        val journal = AiRecommendationJournal(folder.resolve("journal.json").toString())
+        val remote = JSONObject()
+            .put("format", AiRecommendationJournal.FORMAT)
+            .put("schema_version", AiRecommendationJournal.SCHEMA_VERSION)
+            .put(
+                "records",
+                JSONArray().put(
+                    JSONObject()
+                        .put("recommendation_id", "REC-REMOTE")
+                        .put("created_at", "2026-10-09T11:00:00Z")
+                        .put("status", "accepted")
+                        .put("decision_at", "2026-10-09T12:00:00Z")
+                )
+            )
+        val merged = journal.mergeDocument(remote)
+        assertEquals(1, merged.getJSONArray("records").length())
+        assertEquals(
+            "REC-REMOTE",
+            merged.getJSONArray("records").getJSONObject(0).getString("recommendation_id")
+        )
+    }
+
+    @Test(expected = AiRecommendationJournal.JournalException::class)
+    fun conflictingTerminalDecisionsFailClosed() {
+        val folder = Files.createTempDirectory("investment-ai-journal-conflict")
+        val journal = AiRecommendationJournal(folder.resolve("journal.json").toString())
+        val local = JSONObject()
+            .put("format", AiRecommendationJournal.FORMAT)
+            .put("schema_version", AiRecommendationJournal.SCHEMA_VERSION)
+            .put(
+                "records",
+                JSONArray().put(
+                    JSONObject()
+                        .put("recommendation_id", "REC-X")
+                        .put("created_at", "2026-10-09T12:00:00Z")
+                        .put("status", "accepted")
+                        .put("decision_at", "2026-10-09T13:00:00Z")
+                )
+            )
+        journal.mergeDocument(local)
+        journal.mergeDocument(
+            JSONObject()
+                .put("format", AiRecommendationJournal.FORMAT)
+                .put("schema_version", AiRecommendationJournal.SCHEMA_VERSION)
+                .put(
+                    "records",
+                    JSONArray().put(
+                        JSONObject()
+                            .put("recommendation_id", "REC-X")
+                            .put("created_at", "2026-10-09T12:00:00Z")
+                            .put("status", "rejected")
+                            .put("decision_at", "2026-10-09T13:05:00Z")
+                    )
+                )
+        )
+    }
+
 }
