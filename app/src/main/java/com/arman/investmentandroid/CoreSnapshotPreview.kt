@@ -5,6 +5,7 @@ import java.security.MessageDigest
 import java.util.Base64
 import java.text.DecimalFormat
 import java.text.DecimalFormatSymbols
+import java.math.BigDecimal
 import java.math.RoundingMode
 import java.util.Locale
 
@@ -16,7 +17,15 @@ object CoreSnapshotPreview {
         val pattern = if (money) "#,##0.##" else "#,##0.####################"
         val formatter = DecimalFormat(pattern, DecimalFormatSymbols(Locale.US))
         formatter.roundingMode = RoundingMode.HALF_UP
-        return formatter.format(value)
+        val decimal = BigDecimal.valueOf(value)
+        // Tiny crypto amounts must never display as zero solely due to
+        // a decimal-place cap. BigDecimal also avoids binary-float UI noise.
+        if (!money) {
+            formatter.maximumFractionDigits = maxOf(
+                20, decimal.stripTrailingZeros().scale().coerceAtLeast(0)
+            )
+        }
+        return formatter.format(decimal)
     }
 
     internal fun formatMoneyForDisplay(value: Double): String = formatDisplayNumber(value, money = true)
