@@ -955,6 +955,9 @@ class MainActivity : Activity() {
 
     private fun scheduleAutoRefresh() {
         stopAutoRefresh()
+        // Windows Core home never performs background edits on Android's
+        // unrelated local portfolio while the read-only copy is displayed.
+        if (isWindowsCoreHomeSelected()) return
         val minutes = loadAutoRefreshMinutes()
         if (minutes <= 0) {
             return
@@ -3796,6 +3799,7 @@ class MainActivity : Activity() {
 
     private fun scheduleSmartCloudSync() {
         stopSmartCloudSync()
+        if (isWindowsCoreHomeSelected()) return
         if (!isCloudAutoSyncEnabled() || loadCloudBackupUri() == null) {
             return
         }
@@ -4328,6 +4332,8 @@ class MainActivity : Activity() {
     )
 
     private fun smartCloudSyncCheck() {
+        if (isWindowsCoreHomeSelected()) return
+
         if (!isCloudAutoSyncEnabled()) {
             return
         }
@@ -4811,6 +4817,8 @@ class MainActivity : Activity() {
     private fun showWindowsCoreHome(data: WindowsCoreHome.Overview) {
         onPortfolioScreen = true
         onPriceCenterScreen = false
+        stopAutoRefresh()
+        stopSmartCloudSync()
 
         fun body(text: String, prominent: Boolean = false): TextView =
             TextView(this).apply {
@@ -4906,6 +4914,8 @@ class MainActivity : Activity() {
             setOnClickListener {
                 getSharedPreferences(prefsName, MODE_PRIVATE).edit()
                     .putBoolean(windowsCoreHomeKey, false).apply()
+                scheduleAutoRefresh()
+                scheduleSmartCloudSync()
                 showPortfolioScreen()
             }
         })
