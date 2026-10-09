@@ -1311,6 +1311,7 @@ class MainActivity : Activity() {
                 text = ui("Show Windows Portfolio (Read-only)")
                 isAllCaps = false
                 setOnClickListener {
+                    if (!mayEnterWindowsCoreHome()) return@setOnClickListener
                     getSharedPreferences(prefsName, MODE_PRIVATE).edit()
                         .putBoolean(windowsCoreHomeKey, true).apply()
                     showPortfolioScreen()
@@ -4802,6 +4803,18 @@ class MainActivity : Activity() {
             .show()
     }
 
+    private fun mayEnterWindowsCoreHome(): Boolean {
+        if (cloudOperationInProgress.get() || priceUpdateInProgress.get()) {
+            Toast.makeText(
+                this,
+                ui("Finish the current price or cloud operation before switching portfolio views."),
+                Toast.LENGTH_LONG
+            ).show()
+            return false
+        }
+        return true
+    }
+
     private fun windowsCoreCacheFile(): File =
         File(noBackupFilesDir, windowsCoreCacheName)
 
@@ -5690,6 +5703,7 @@ class MainActivity : Activity() {
                                 text = ui("Show on home (Windows read-only)")
                                 isAllCaps = false
                                 setOnClickListener {
+                                    if (!mayEnterWindowsCoreHome()) return@setOnClickListener
                                     try {
                                         saveVerifiedWindowsCore(raw)
                                         getSharedPreferences(prefsName, MODE_PRIVATE).edit()
