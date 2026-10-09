@@ -1,3 +1,24 @@
+## Android phone read-only Core preview acceptance — October 9, 2026
+
+The user successfully opened an actual exported, older October 8 Windows Core v11
+backup in the installed Android v0.32 preview. The screen displayed 15 SQLite
+tables, 26 transaction rows, 1 quantity correction, 1 revision, 0 voids,
+9 holdings and 4 cash accounts. Android's checksum/parity validation
+completed sufficiently to render the read-only verified preview.
+**This does not establish two-way sync, a latest October 9 portfolio match
+or safe application of proposed transactions.**
+
+Phone screenshot also exposed two UI issues: scientific notation in Toman
+values and an oversized preview action area on tall portfolios. This Draft
+branch now formats Toman with 0–2 fractional digits and digit grouping,
+retains small crypto quantity precision, constrains the scrollable preview
+height, and places optional offline proposal actions inside the dialog rather
+than on the stock three-button footer. Six isolated Kotlin number-formatting
+checks passed locally; repository Gradle unit/lint/build and updated device
+layout tests are NOT yet executed. The installed Android APK is unchanged.
+
+---
+
 ## 2026-10-09 update — Windows v0.12.0 alignment
 
 Windows production source has advanced to Core v11, Windows v0.12.0, release/windows
