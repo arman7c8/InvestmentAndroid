@@ -160,6 +160,8 @@ class AiRecommendationJournal private constructor(private val file: File) {
         val result = mutableListOf<AiAdvisorContract.RecommendationOutcome>()
         for (index in start until records.length()) {
             val record = records.getJSONObject(index)
+            val status = record.optString("status")
+            if (status != "accepted" && status != "rejected") continue
             val created = try { Instant.parse(record.getString("created_at")) } catch (_: Exception) { continue }
             val ageDays = maxOf(0, Duration.between(created, now).toDays().toInt())
             val outcome = record.optJSONObject("outcome")
