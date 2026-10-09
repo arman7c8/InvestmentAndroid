@@ -183,6 +183,9 @@ class MainActivity : Activity() {
         window.decorView.layoutDirection =
             if (uiLanguage() == "fa") View.LAYOUT_DIRECTION_RTL else View.LAYOUT_DIRECTION_LTR
         ensureSeedData()
+        pendingCoreFinancialProposalJson = PendingCoreFinancialRequest.restore(
+            savedInstanceState?.getString(PendingCoreFinancialRequest.STATE_KEY)
+        )
 
         when (StartupScreen.destination(
             lockEnabled = isAppLockEnabled(),
@@ -200,6 +203,9 @@ class MainActivity : Activity() {
     override fun onSaveInstanceState(outState: Bundle) {
         outState.putBoolean("portfolio_screen", onPortfolioScreen)
         outState.putBoolean("price_center_screen", onPriceCenterScreen)
+        PendingCoreFinancialRequest.restore(pendingCoreFinancialProposalJson)?.let {
+            outState.putString(PendingCoreFinancialRequest.STATE_KEY, it)
+        }
         super.onSaveInstanceState(outState)
     }
 
@@ -4817,7 +4823,43 @@ class MainActivity : Activity() {
     }
 
     /** Export an offline Core command proposal; never modify financial state. */
+    private fun launchPendingCoreFinancialExport() {
+        if (PendingCoreFinancialRequest.restore(pendingCoreFinancialProposalJson) == null) {
+            pendingCoreFinancialProposalJson = null
+            Toast.makeText(this, ui("No financial request to export."), Toast.LENGTH_LONG).show()
+            return
+        }
+        val intent = Intent(Intent.ACTION_CREATE_DOCUMENT).apply {
+            addCategory(Intent.CATEGORY_OPENABLE)
+            type = "application/json"
+            putExtra(Intent.EXTRA_TITLE, "Investment-Core-financial-proposal.json")
+        }
+        startActivityForResult(intent, coreFinancialProposalSaveRequestCode)
+    }
+
     private fun chooseCoreFinancialRequest(snapshot: CoreSnapshotPreview.Summary) {
+        if (PendingCoreFinancialRequest.restore(pendingCoreFinancialProposalJson) != null) {
+            AlertDialog.Builder(this)
+                .setTitle(ui("Pending financial request"))
+                .setMessage(ui(
+                    "The previous request was not confirmed saved. Retry with the same ID or discard it. No transaction was executed."
+                ))
+                .setPositiveButton(ui("Retry same financial request")) { _, _ ->
+                    launchPendingCoreFinancialExport()
+                }
+                .setNeutralButton(ui("Discard and create a new request")) { _, _ ->
+                    pendingCoreFinancialProposalJson = null
+                    showCoreFinancialCommandTypes(snapshot)
+                }
+                .setNegativeButton(ui("Cancel"), null)
+                .show()
+        } else {
+            pendingCoreFinancialProposalJson = null
+            showCoreFinancialCommandTypes(snapshot)
+        }
+    }
+
+    private fun showCoreFinancialCommandTypes(snapshot: CoreSnapshotPreview.Summary) {
         val kinds = listOf("buy", "sell", "transfer", "deposit", "withdraw")
         val labels = listOf(
             "Buy from cash account", "Sell to cash account",
@@ -4935,13 +4977,8 @@ class MainActivity : Activity() {
                             }
                         )
                     )
-                    val intent = Intent(Intent.ACTION_CREATE_DOCUMENT).apply {
-                        addCategory(Intent.CATEGORY_OPENABLE)
-                        type = "application/json"
-                        putExtra(Intent.EXTRA_TITLE, "Investment-Core-financial-proposal.json")
-                    }
                     dialog.dismiss()
-                    startActivityForResult(intent, coreFinancialProposalSaveRequestCode)
+                    launchPendingCoreFinancialExport()
                 } catch (error: Exception) {
                     Toast.makeText(
                         this, ui(error.message ?: "Invalid financial proposal."),
@@ -5312,7 +5349,7 @@ class MainActivity : Activity() {
 
         if (resultCode != RESULT_OK) {
             if (requestCode == corePolicyProposalSaveRequestCode) pendingCorePolicyProposalJson = null
-            if (requestCode == coreFinancialProposalSaveRequestCode) pendingCoreFinancialProposalJson = null
+            // Keep financial JSON/UUID on picker cancel or missing URI.
             if (
                 requestCode == createCloudBackupRequestCode ||
                 requestCode == connectCloudBackupRequestCode
@@ -5328,7 +5365,7 @@ class MainActivity : Activity() {
 
         val uri = data?.data ?: run {
             if (requestCode == corePolicyProposalSaveRequestCode) pendingCorePolicyProposalJson = null
-            if (requestCode == coreFinancialProposalSaveRequestCode) pendingCoreFinancialProposalJson = null
+            // Keep financial JSON/UUID on picker cancel or missing URI.
             if (
                 requestCode == createCloudBackupRequestCode ||
                 requestCode == connectCloudBackupRequestCode
@@ -5400,8 +5437,9 @@ class MainActivity : Activity() {
                     }
                 }
                 coreFinancialProposalSaveRequestCode -> {
-                    val request = pendingCoreFinancialProposalJson
-                    pendingCoreFinancialProposalJson = null
+                    val request = PendingCoreFinancialRequest.restore(
+                        pendingCoreFinancialProposalJson
+                    )
                     if (request == null) {
                         showBackupFileError(
                             IllegalStateException("No financial request to export.")
@@ -5417,13 +5455,19 @@ class MainActivity : Activity() {
                                 )
                             },
                             onSuccess = {
+                                if (pendingCoreFinancialProposalJson == request) {
+                                    pendingCoreFinancialProposalJson = null
+                                }
                                 Toast.makeText(
                                     this,
                                     ui("Financial request saved; no financial data changed."),
                                     Toast.LENGTH_LONG
                                 ).show()
                             },
-                            onFailure = { error -> showBackupFileError(error) }
+                            onFailure = { error ->
+                                // Keep exactly the same UUID and JSON for a later retry.
+                                showBackupFileError(error)
+                            }
                         )
                     }
                 }
