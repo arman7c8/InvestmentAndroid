@@ -4508,6 +4508,8 @@ class MainActivity : Activity() {
                     }
                 }
                 val remoteShared = validated.sharedPortfolio
+                // Core projection files cannot be updated by Android holdings writes.
+                remoteShared?.let(PortfolioSafety::requireEditableAndroidPortfolio)
                 val localShared = buildSharedPortfolio()
                 if (remoteShared != null) {
                     PortfolioSafety.ensureSafeReplacement(
@@ -5386,7 +5388,10 @@ class MainActivity : Activity() {
     private fun restoreBackupJson(raw: String, mergeLocalHistory: Boolean = false) {
         val validated = PortfolioSafety.validateBackup(raw)
         when (validated.kind) {
-            PortfolioSafety.BackupKind.SHARED -> applySharedBackup(validated, mergeLocalHistory)
+            PortfolioSafety.BackupKind.SHARED -> {
+                validated.sharedPortfolio?.let(PortfolioSafety::requireEditableAndroidPortfolio)
+                applySharedBackup(validated, mergeLocalHistory)
+            }
             PortfolioSafety.BackupKind.LEGACY_ANDROID -> applyLegacyAndroidBackup(validated)
         }
     }
