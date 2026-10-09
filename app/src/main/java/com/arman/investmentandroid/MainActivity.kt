@@ -2190,12 +2190,15 @@ class MainActivity : Activity() {
                 append("  •  Review: ")
                 append(record.optString("review_due_at").take(10))
                 if (outcome != null) {
-                    append("\nOutcome: ")
+                    append("\nObserved outcome: ")
                     append(String.format(
                         Locale.US,
                         "%+.2f%%",
                         outcome.optDouble("portfolio_return_pct", 0.0)
                     ))
+                    append(" · flow-adjusted by Windows Core")
+                } else if (record.optString("status") == "accepted") {
+                    append("\nAwaiting Windows Core outcome evaluation")
                 }
             }
             body.addView(
