@@ -130,6 +130,7 @@ class MainActivity : Activity() {
     private val cloudExecutor = Executors.newSingleThreadExecutor()
     private val aiExecutor = Executors.newSingleThreadExecutor()
     private val chatGptPlanClient by lazy { ChatGptPlanClient(this) }
+    private val aiRecommendationJournal by lazy { AiRecommendationJournal(this) }
     private val cloudOperationInProgress = AtomicBoolean(false)
     private val priceUpdateInProgress = AtomicBoolean(false)
 
@@ -1182,6 +1183,7 @@ class MainActivity : Activity() {
 
         return AiAdvisorContract.buildSnapshot(
             allocations = allocations,
+            recommendationHistory = aiRecommendationJournal.compactHistory(),
             atlasContext = atlasContext,
             generatedAt = java.time.Instant.now().toString()
         )
@@ -1209,6 +1211,7 @@ class MainActivity : Activity() {
             return
         }
 
+        var currentRecordId: String? = null
         val status = TextView(this).apply {
             text = ui("Analyzing allocation with ChatGPT…")
             textSize = 15f
@@ -1218,7 +1221,57 @@ class MainActivity : Activity() {
             .setTitle(ui("AI Advisor"))
             .setView(status)
             .setNegativeButton(ui("Close"), null)
+            .setNeutralButton(ui("Reject"), null)
+            .setPositiveButton(ui("Accept for tracking"), null)
             .create()
+        dialog.setOnShowListener {
+            val accept = dialog.getButton(AlertDialog.BUTTON_POSITIVE)
+            val reject = dialog.getButton(AlertDialog.BUTTON_NEUTRAL)
+            accept.isEnabled = false
+            reject.isEnabled = false
+
+            accept.setOnClickListener {
+                val id = currentRecordId ?: return@setOnClickListener
+                runCatching {
+                    aiRecommendationJournal.setDecision(id, "accepted")
+                }.onSuccess {
+                    Toast.makeText(
+                        this,
+                        ui("Recommendation accepted for outcome tracking. Targets were not changed."),
+                        Toast.LENGTH_LONG
+                    ).show()
+                    accept.isEnabled = false
+                    reject.isEnabled = false
+                }.onFailure { error ->
+                    Toast.makeText(
+                        this,
+                        ui(error.message ?: "Could not save AI decision."),
+                        Toast.LENGTH_LONG
+                    ).show()
+                }
+            }
+
+            reject.setOnClickListener {
+                val id = currentRecordId ?: return@setOnClickListener
+                runCatching {
+                    aiRecommendationJournal.setDecision(id, "rejected")
+                }.onSuccess {
+                    Toast.makeText(
+                        this,
+                        ui("Recommendation rejected and recorded."),
+                        Toast.LENGTH_SHORT
+                    ).show()
+                    accept.isEnabled = false
+                    reject.isEnabled = false
+                }.onFailure { error ->
+                    Toast.makeText(
+                        this,
+                        ui(error.message ?: "Could not save AI decision."),
+                        Toast.LENGTH_LONG
+                    ).show()
+                }
+            }
+        }
         dialog.show()
 
         aiExecutor.execute {
@@ -1226,13 +1279,21 @@ class MainActivity : Activity() {
                 val atlas = AtlasMarketContext.loadOrNull()
                 val snapshot = buildAiAdvisorSnapshot(atlas)
                 val model = chatGptPlanClient.availableModels().first()
-                Triple(model, chatGptPlanClient.analyzeSnapshot(snapshot, model.slug), atlas != null)
+                val recommendation = chatGptPlanClient.analyzeSnapshot(snapshot, model.slug)
+                val record = aiRecommendationJournal.recordRecommendation(
+                    snapshot = snapshot,
+                    recommendation = recommendation,
+                    model = model.slug
+                )
+                arrayOf(model, recommendation, atlas != null, record)
             }
             runOnUiThread {
-                result.onSuccess { pair ->
-                    val model = pair.first
-                    val recommendation = pair.second
-                    val atlasUsed = pair.third
+                result.onSuccess { values ->
+                    val model = values[0] as ChatGptPlanClient.Model
+                    val recommendation = values[1] as JSONObject
+                    val atlasUsed = values[2] as Boolean
+                    val record = values[3] as JSONObject
+                    currentRecordId = record.getString("recommendation_id")
                     val targets = recommendation.getJSONArray("suggested_targets")
                     val body = buildString {
                         append(recommendation.optString("summary", ""))
@@ -1270,9 +1331,12 @@ class MainActivity : Activity() {
                         append("\nReview after ")
                         append(recommendation.optInt("review_after_days", 7))
                         append(" days.")
-                        append("\n\nNo target has been changed. This is a suggestion only.")
+                        append("\n\nAccept stores this recommendation for future outcome tracking. ")
+                        append("It does not change any target.")
                     }
                     status.text = body
+                    dialog.getButton(AlertDialog.BUTTON_POSITIVE)?.isEnabled = true
+                    dialog.getButton(AlertDialog.BUTTON_NEUTRAL)?.isEnabled = true
                 }.onFailure { error ->
                     status.text = ui(error.message ?: "AI analysis failed.")
                 }
