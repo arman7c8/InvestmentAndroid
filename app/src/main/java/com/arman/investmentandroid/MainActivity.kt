@@ -1137,6 +1137,143 @@ class MainActivity : Activity() {
             .show()
     }
 
+    private fun buildAiAdvisorSnapshot(): JSONObject {
+        val assets = loadAssets().filter { it.includeInTarget }
+        if (assets.isEmpty()) {
+            throw IllegalStateException("No assets are included in target allocation.")
+        }
+        val totalTarget = assets.sumOf { it.targetPercent }
+        if (kotlin.math.abs(totalTarget - 100.0) > 0.01) {
+            throw IllegalStateException("Target allocation must total 100% before AI analysis.")
+        }
+        val targetValue = assets.sumOf { it.value }
+        if (!targetValue.isFinite() || targetValue <= 0.0) {
+            throw IllegalStateException("Target portfolio has no current value to analyze.")
+        }
+
+        val allocations = assets.mapIndexed { index, asset ->
+            val currentPct = asset.value / targetValue * 100.0
+            val publicKey = when {
+                asset.symbol.isNotBlank() -> asset.symbol
+                asset.sourceAssetId.isNotBlank() -> asset.sourceAssetId
+                asset.sharedId.isNotBlank() -> asset.sharedId
+                else -> asset.category.uppercase(Locale.US)
+                    .replace(Regex("[^A-Z0-9]+"), "-")
+                    .trim('-') + "-" + (index + 1)
+            }
+            val performancePct = if (
+                asset.category != "Cash" &&
+                asset.averageCost.isFinite() &&
+                asset.averageCost > 0.0 &&
+                asset.price.isFinite()
+            ) {
+                (asset.price / asset.averageCost - 1.0) * 100.0
+            } else {
+                null
+            }
+            AiAdvisorContract.Allocation(
+                scope = "portfolio_asset",
+                publicKey = publicKey,
+                currentPct = currentPct,
+                targetPct = asset.targetPercent,
+                performancePct = performancePct
+            )
+        }
+
+        return AiAdvisorContract.buildSnapshot(
+            allocations = allocations,
+            generatedAt = java.time.Instant.now().toString()
+        )
+    }
+
+    private fun showAiAdvisorDialog() {
+        if (!chatGptPlanClient.isConnected()) {
+            AlertDialog.Builder(this)
+                .setTitle(ui("AI Advisor"))
+                .setMessage(ui("Connect ChatGPT in Settings first."))
+                .setNegativeButton(ui("Close"), null)
+                .setPositiveButton(ui("Open Settings")) { _, _ -> showSettingsDialog() }
+                .show()
+            return
+        }
+
+        val snapshot = try {
+            buildAiAdvisorSnapshot()
+        } catch (exc: Exception) {
+            Toast.makeText(
+                this,
+                ui(exc.message ?: "Portfolio is not ready for AI analysis."),
+                Toast.LENGTH_LONG
+            ).show()
+            return
+        }
+
+        val status = TextView(this).apply {
+            text = ui("Analyzing allocation with ChatGPT…")
+            textSize = 15f
+            setPadding(dp(20), dp(16), dp(20), dp(16))
+        }
+        val dialog = AlertDialog.Builder(this)
+            .setTitle(ui("AI Advisor"))
+            .setView(status)
+            .setNegativeButton(ui("Close"), null)
+            .create()
+        dialog.show()
+
+        aiExecutor.execute {
+            val result = runCatching {
+                val model = chatGptPlanClient.availableModels().first()
+                model to chatGptPlanClient.analyzeSnapshot(snapshot, model.slug)
+            }
+            runOnUiThread {
+                result.onSuccess { pair ->
+                    val model = pair.first
+                    val recommendation = pair.second
+                    val targets = recommendation.getJSONArray("suggested_targets")
+                    val body = buildString {
+                        append(recommendation.optString("summary", ""))
+                        append("\n\n")
+                        append("Market risk: ")
+                        append(recommendation.optString("market_risk", "unknown"))
+                        append("  •  Portfolio risk: ")
+                        append(recommendation.optString("portfolio_risk", "unknown"))
+                        append("\nConfidence: ")
+                        append(String.format(Locale.US, "%.0f%%", recommendation.optDouble("confidence_pct", 0.0)))
+                        append("\nModel: ")
+                        append(model.displayName)
+                        append("\n\nSuggested targets:\n")
+                        for (index in 0 until targets.length()) {
+                            val row = targets.getJSONObject(index)
+                            if (row.optString("scope") != "portfolio_asset") continue
+                            append("• ")
+                            append(row.optString("public_key"))
+                            append(": ")
+                            append(String.format(
+                                Locale.US,
+                                "%.1f%% → %.1f%%",
+                                row.optDouble("current_pct"),
+                                row.optDouble("suggested_pct")
+                            ))
+                            val reason = row.optString("reason")
+                            if (reason.isNotBlank()) {
+                                append(" — ")
+                                append(reason)
+                            }
+                            append("\n")
+                        }
+                        append("\nReview after ")
+                        append(recommendation.optInt("review_after_days", 7))
+                        append(" days.")
+                        append("\n\nNo target has been changed. This is a suggestion only.")
+                    }
+                    status.text = body
+                }.onFailure { error ->
+                    status.text = ui(error.message ?: "AI analysis failed.")
+                }
+            }
+        }
+    }
+
     private fun buildPrivacySafeAiSummary(): String {
         val assets = loadAssets()
         val totalValue = assets.sumOf { it.value }
@@ -1349,6 +1486,13 @@ class MainActivity : Activity() {
             setOnClickListener { showTargetsDialog() }
         }
 
+        val aiAdvisorButton = Button(this).apply {
+            text = ui("AI Advisor")
+            isAllCaps = false
+            textSize = 16f
+            setOnClickListener { showAiAdvisorDialog() }
+        }
+
         val toleranceButton = Button(this).apply {
             text = String.format(Locale.US, ui("Tolerance: ±%.1f%%"), tolerance)
             isAllCaps = false
@@ -1474,6 +1618,23 @@ class MainActivity : Activity() {
             }
         )
         container.addView(primaryRow, buttonParams)
+
+        val advisorRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+        }
+        advisorRow.addView(
+            targetsButton,
+            LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply {
+                marginEnd = dp(5)
+            }
+        )
+        advisorRow.addView(
+            aiAdvisorButton,
+            LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply {
+                marginStart = dp(5)
+            }
+        )
+        container.addView(advisorRow, buttonParams)
 
         val secondaryRow = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
