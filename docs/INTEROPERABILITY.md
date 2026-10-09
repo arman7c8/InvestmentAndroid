@@ -1,3 +1,30 @@
+## 2026-10-09 update — Windows v0.12.0 alignment
+
+Windows production source has advanced to Core v11, Windows v0.12.0, release/windows
+commit 8f0ba197087418308fb5999e670f147d3e268244.
+Android continuation source is codex/core-financial-dryrun-v0.32,
+commit 379f24babb52d4d798bfefe5e4f7667c125478f7.
+
+Windows Draft PR #163 (feature/android-v012-readonly-export) implements an OFFLINE
+read-only Core v2 JSON exporter in the Windows desktop UI. On Android select
+Backup / Restore → View Windows Core Snapshot (Read-only) to inspect the downloaded
+versioned JSON. The Android verifier recomputes original financial quantities,
+cash balances and policy from the embedded ledger. It does not replace local
+Android holdings or write to a cloud document.
+
+This Android safety branch also rejects any ordinary cloud overwrite or normal
+backup restore of a sharedPortfolio asset marked source_platform=windows-core.
+A Windows holdings projection is not an Android event ledger. Ordinary
+Android-to-Android JSON sync for Android-managed portfolios remains unchanged.
+
+**Both branches are test/development only.** Android Gradle/JVM tests and
+on-device cross-platform acceptance have not been run for this change.
+Two-way Core financial application and policy edits still require a
+validated Windows-side apply operation, idempotence, authoritative revision
+guards and no-loss conflict/rollback tests before production use.
+
+---
+
 # Windows Core ↔ Android synchronization: compatibility and safety checkpoint
 
 Verified against Windows `arman7c8/Investment@release/windows` (`a61885ad40b81c0cc3a10134422376f89ff3276e`, v0.11.0) and Android development v0.32.0.
