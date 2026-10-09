@@ -4524,6 +4524,10 @@ class MainActivity : Activity() {
             }
         }
         root.put("androidBackup", PortfolioSafety.preserveSupplementalFields(localSupplement, remoteSupplement))
+        root.put(
+            "aiJournal",
+            aiRecommendationJournal.mergeDocument(root.optJSONObject("aiJournal"))
+        )
         return root
     }
 
@@ -5478,6 +5482,7 @@ class MainActivity : Activity() {
 
         check(committed) { "Android could not save the restored portfolio. Local data was not changed." }
 
+        aiRecommendationJournal.mergeDocument(validated.root.optJSONObject("aiJournal"))
         scheduleAutoRefresh()
     }
 
@@ -5518,6 +5523,7 @@ class MainActivity : Activity() {
             put("updatedAt", System.currentTimeMillis())
             put("sharedPortfolio", buildSharedPortfolio())
             put("androidBackup", buildAndroidBackupPayload())
+            put("aiJournal", aiRecommendationJournal.exportDocument())
         }.toString(2)
     }
 
