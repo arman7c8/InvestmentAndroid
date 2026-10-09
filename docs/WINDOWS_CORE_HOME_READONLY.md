@@ -83,3 +83,32 @@ Before financial two-way synchronization: authoritative Windows Core apply API,
 same-operation ID deduplication, compare-and-swap revision enforcement,
 reconciliation screen, pre-apply backups, accounting invariant tests,
 interrupted-write recovery and dual-device conflict acceptance.
+
+## Reproducible local/Codespaces build (no GitHub Actions)
+
+A guarded developer script lives at
+`scripts/build_isolated_windows_core_preview.sh`. It **never** merges,
+releases, installs, or touches the production app data.
+
+Prerequisites: Java 17, Gradle 8.7, an installed Android SDK with
+platforms/android-35 and build-tools/35.0.0, and a clean checkout of
+`feature/v032-windows-core-home-readonly`.
+
+Run:
+
+```bash
+bash scripts/build_isolated_windows_core_preview.sh
+```
+
+It runs **testDebugUnitTest, lintDebug, assembleDebug** with a preview
+applicationId suffix derived from the exact 12-char Git commit ID, then checks
+the APK label/identity/version/debug signature, and writes a package with
+`SHA256SUMS.txt` and `SOURCE-COMMIT.txt` into an isolated `dist/` directory.
+This preview must be installed *side by side* with the normal app and must
+never prompt a user to uninstall their existing installation.
+
+If prerequisites are unavailable, the script fails before any APK is built.
+A successful script result is **not** yet a physical-device acceptance pass:
+validate the read-only Windows home, restart, mode-switch, quote mismatch
+failure and absence of unwanted changes in the user's separate installed app.
+
