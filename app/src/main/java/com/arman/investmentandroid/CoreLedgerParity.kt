@@ -16,6 +16,7 @@ object CoreLedgerParity {
         private val data = tables.getJSONObject(name)
         private val columns = data.getJSONArray("columns")
         private val rows = data.getJSONArray("rows")
+        private val rowids = data.getJSONArray("rowids")
         private val lookup = (0 until columns.length()).associateBy { columns.getString(it) }
 
         fun records(): List<JSONObject> = (0 until rows.length()).map { index ->
@@ -24,6 +25,9 @@ object CoreLedgerParity {
                 for ((name, column) in lookup) put(name, row.get(column))
             }
         }
+
+        fun recordsWithRowids(): List<Pair<Long, JSONObject>> =
+            records().mapIndexed { index, row -> rowids.getLong(index) to row }
     }
 
     private fun string(item: JSONObject, name: String): String =
@@ -124,10 +128,10 @@ object CoreLedgerParity {
         // native USDT quotes repriced with the latest reference asset.
         // A valid SHA alone does not prove the displayed valuation is correct.
         val latestQuotes = linkedMapOf<String, JSONObject>()
-        val prices = Table(tables, "prices").records()
-        prices.withIndex().sortedWith(
-            compareBy<IndexedValue<JSONObject>> { string(it.value, "observed_at") }
-                .thenBy { it.index }
+        val prices = Table(tables, "prices").recordsWithRowids()
+        prices.sortedWith(
+            compareBy<Pair<Long, JSONObject>> { string(it.second, "observed_at") }
+                .thenBy { it.first }
         ).forEach { (_, row) ->
             val id = string(row, "asset_id")
             require(id in assetIds) { "Price record has an unknown Core asset." }
