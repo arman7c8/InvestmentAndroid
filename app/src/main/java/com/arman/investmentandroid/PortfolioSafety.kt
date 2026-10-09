@@ -150,6 +150,21 @@ object PortfolioSafety {
         return assets.length()
     }
 
+    /** Windows Core holdings are a derived projection, not an Android event ledger.
+     * Never overwrite one from Android or import it as editable Android assets.
+     * Use the separately checksum-verified Windows Core read-only preview.
+     */
+    fun requireEditableAndroidPortfolio(portfolio: JSONObject) {
+        val assets = portfolio.optJSONArray("assets") ?: return
+        for (index in 0 until assets.length()) {
+            val asset = assets.optJSONObject(index) ?: continue
+            require(asset.optString("source_platform") != "windows-core") {
+                "This file contains a Windows Core projection, not an editable Android ledger. " +
+                    "Use View Windows Core Snapshot (Read-only). Nothing was changed."
+            }
+        }
+    }
+
     fun ensureSafeReplacement(localAssetCount: Int, incomingAssetCount: Int) {
         require(localAssetCount <= 0 || incomingAssetCount > 0) {
             "Backup contains no assets, so it was not allowed to replace the current portfolio."
