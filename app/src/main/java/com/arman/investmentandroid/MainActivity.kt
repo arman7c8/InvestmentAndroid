@@ -3330,6 +3330,12 @@ class MainActivity : Activity() {
                         priceUpdateInProgress.set(false)
                         return@runOnUiThread
                     }
+                    if (isWindowsCoreHomeSelected()) {
+                        // Network activity started in Android mode can finish
+                        // after the user switches to the Windows read-only home.
+                        priceUpdateInProgress.set(false)
+                        return@runOnUiThread
+                    }
                     val latestAssets = loadAssets()
                     if (latestAssets.size != currentAssets.size ||
                         latestAssets.indices.any { !assetsEquivalent(latestAssets[it], currentAssets[it]) }
@@ -4373,6 +4379,7 @@ class MainActivity : Activity() {
                 )
             },
             onSuccess = { result ->
+                if (isWindowsCoreHomeSelected()) return@runStorageOperation
                 // A check is throttled only after a complete, valid provider read.
                 prefs.edit().putLong(cloudLastAutoCheckKey, now).apply()
                 when (result.decision) {
@@ -4535,6 +4542,7 @@ class MainActivity : Activity() {
     )
 
     private fun syncToCloud(forcePhoneData: Boolean = false) {
+        if (isWindowsCoreHomeSelected()) return
         val uri = loadCloudBackupUri()
         if (uri == null) {
             showCloudBackupDialog()
@@ -4607,9 +4615,15 @@ class MainActivity : Activity() {
                     }
                 }
 
+                require(!isWindowsCoreHomeSelected()) {
+                    "Windows Core read-only mode is active; Android cloud writes are suspended."
+                }
                 val document = mergedBackupDocument(existingRaw)
                 preserveCloudBeforeWrite(uri, existingRaw)
                 PortfolioSafety.requireUnchangedCloudFile(existingRaw, readUriText(uri))
+                require(!isWindowsCoreHomeSelected()) {
+                    "Windows Core mode became active before cloud write; no upload started."
+                }
                 val writtenRaw = document.toString(2)
                 PortfolioSafety.writeAndVerifyBackup(
                     writtenRaw,
@@ -4622,6 +4636,7 @@ class MainActivity : Activity() {
                 )
             },
             onSuccess = { result ->
+                if (isWindowsCoreHomeSelected()) return@runStorageOperation
                 when (result.action) {
                     CloudSyncAction.MATCH -> {
                         result.remote?.let(::saveCloudBaseline)
@@ -4689,6 +4704,7 @@ class MainActivity : Activity() {
     }
 
     private fun loadFromCloud() {
+        if (isWindowsCoreHomeSelected()) return
         val uri = loadCloudBackupUri()
         if (uri == null) {
             showCloudBackupDialog()
@@ -4717,6 +4733,9 @@ class MainActivity : Activity() {
     }
 
     private fun applyCloudRaw(raw: String, expectedLocalFingerprint: String? = null) {
+        // An already running cloud read must not apply data after the user
+        // switches to the independent Windows Core read-only home.
+        if (isWindowsCoreHomeSelected()) return
         try {
             if (
                 expectedLocalFingerprint != null &&
