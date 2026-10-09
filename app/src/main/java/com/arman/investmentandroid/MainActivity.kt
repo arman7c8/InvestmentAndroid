@@ -2179,6 +2179,7 @@ class MainActivity : Activity() {
                 append(record.optString("created_at").take(19).replace("T", " "))
                 append("  •  ")
                 append(record.optString("status", "pending").uppercase(Locale.US))
+                if (record.optString("applied_at").isNotBlank()) append(" · APPLIED")
                 append("\n")
                 append(recommendation?.optString("summary", "") ?: "")
                 append("\nConfidence: ")
