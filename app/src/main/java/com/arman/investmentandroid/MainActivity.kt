@@ -113,6 +113,7 @@ class MainActivity : Activity() {
     private val cloudPreWriteFileName = "cloud_prewrite_recovery.json"
     // A separate offline Windows Core cache; never mixed into editable Android JSON.
     private val windowsCoreHomeKey = "windows_core_home_readonly"
+    private val windowsCoreLoadedAtKey = "windows_core_loaded_at"
     private val windowsCoreCacheName = "verified_windows_core_readonly.json"
     private val uiLanguageKey = "ui_language"
     private val exportBackupRequestCode = 1001
@@ -4868,6 +4869,11 @@ class MainActivity : Activity() {
                 "   •   " + ui("Transactions") + ": " + data.transactionCount
         ))
         top.addView(body("SHA-256: " + data.sha256.take(12) + "…"))
+        val loadedAt = getSharedPreferences(prefsName, MODE_PRIVATE)
+            .getLong(windowsCoreLoadedAtKey, 0L)
+        if (loadedAt > 0L) {
+            top.addView(body(ui("Imported to phone: ") + formatDate(loadedAt)))
+        }
         container.addView(top)
 
         container.addView(body(ui("Windows holdings"), true))
@@ -5668,6 +5674,7 @@ class MainActivity : Activity() {
                                     try {
                                         saveVerifiedWindowsCore(raw)
                                         getSharedPreferences(prefsName, MODE_PRIVATE).edit()
+                                            .putLong(windowsCoreLoadedAtKey, System.currentTimeMillis())
                                             .putBoolean(windowsCoreHomeKey, true).apply()
                                         previewDialog.dismiss()
                                         showPortfolioScreen()
