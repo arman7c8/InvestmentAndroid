@@ -34,6 +34,16 @@ class WindowsCoreHomeTest {
                     rows.put(JSONArray().put("btc"))
                     rowids.put(1)
                 }
+                "prices" -> {
+                    columns = JSONArray().put("id").put("asset_id")
+                        .put("price_toman").put("observed_at")
+                    if (value != null) {
+                        val quote = if (quantity == 0.0) value else value / quantity
+                        rows.put(JSONArray().put("quote-1").put("btc")
+                            .put(quote).put("2026-10-09T12:00:00"))
+                        rowids.put(1)
+                    }
+                }
                 "opening_positions" -> {
                     columns = JSONArray().put("snapshot_id").put("asset_id").put("quantity")
                     rows.put(JSONArray().put(1).put("btc").put(quantity))
