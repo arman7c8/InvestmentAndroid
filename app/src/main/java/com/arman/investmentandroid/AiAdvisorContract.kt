@@ -33,6 +33,7 @@ object AiAdvisorContract {
         val recommendationId: String,
         val ageDays: Int,
         val accepted: Boolean? = null,
+        val applied: Boolean? = null,
         val outcomePct: Double? = null
     )
 
@@ -117,6 +118,7 @@ object AiAdvisorContract {
                 .put("recommendation_id", publicKey(item.recommendationId, "REC-" + (index + 1)))
                 .put("age_days", item.ageDays.coerceIn(0, 3650))
             item.accepted?.let { record.put("accepted", it) }
+            item.applied?.let { record.put("applied", it) }
             item.outcomePct?.let {
                 record.put("outcome_pct", finitePercent(it, "outcome_pct"))
             }
