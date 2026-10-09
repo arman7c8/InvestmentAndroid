@@ -1,0 +1,15 @@
+{
+  "format": "investment.core.financial.proposal",
+  "contractVersion": 1,
+  "operationId": "3a79b77c-a9d9-4928-aeae-6671d68dc2c2",
+  "baseSnapshotSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "transaction": {
+    "type": "buy",
+    "assetId": "btc",
+    "accountId": "wallet",
+    "amountToman": 100000,
+    "quantity": 0.1,
+    "expectedAccountBalanceToman": 1300000,
+    "expectedAssetQuantity": 1.05
+  }
+}

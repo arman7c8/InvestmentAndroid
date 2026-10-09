@@ -18,6 +18,42 @@ object UiText {
         "Saving target change request" to "در حال ذخیره درخواست تغییر اهداف",
         "Target request saved. No investment data changed." to
             "درخواست تغییر ذخیره شد. هیچ اطلاعات سرمایه‌گذاری تغییر نکرد.",
+        "Prepare financial request" to "تهیه درخواست مالی",
+        "Prepare Windows financial request" to "تهیه درخواست مالی ویندوز",
+        "Buy from cash account" to "خرید از حساب نقدی",
+        "Sell to cash account" to "فروش و واریز به حساب نقدی",
+        "Transfer between cash accounts" to "انتقال بین حساب‌های نقدی",
+        "Deposit cash" to "واریز نقدی",
+        "Withdraw cash" to "برداشت نقدی",
+        "Source cash account" to "حساب نقدی مبدأ",
+        "Destination cash account" to "حساب نقدی مقصد",
+        "Cash account" to "حساب نقدی",
+        "Windows Core asset" to "دارایی ویندوز",
+        "Total trade amount (Toman)" to "مبلغ کل تراکنش (تومان)",
+        "Trade quantity" to "مقدار معامله",
+        "Offline simulation request; no transactions are recorded." to
+            "درخواست شبیه‌سازی آفلاین؛ هیچ تراکنشی ثبت نمی‌شود.",
+        "Export request (not applied)" to "خروجی درخواست (بدون اعمال تغییر)",
+        "Enter a positive amount." to "مبلغ مثبت وارد کنید.",
+        "Enter a positive quantity." to "مقدار مثبت وارد کنید.",
+        "Windows Core snapshot lacks the accounts or assets needed." to
+            "اطلاعات ویندوز حساب یا دارایی مورد نیاز را ندارد.",
+        "Invalid financial proposal." to "درخواست مالی نامعتبر است.",
+        "No financial request to export." to "فایل درخواست مالی موجود نیست.",
+        "Saving Windows financial request" to "ذخیره درخواست مالی ویندوز",
+        "Financial request saved; no financial data changed." to
+            "درخواست مالی ذخیره شد؛ اطلاعات اصلی تغییری نکرد.",
+        "Financial request file saved. Operation ID remains pending; no trade was applied." to
+            "فایل درخواست مالی ذخیره شد. شناسه درخواست برای پیگیری محفوظ است؛ هیچ معامله‌ای ثبت نشده است.",
+        "Pending financial request" to "درخواست مالی ذخیره‌نشده",
+        "The previous request was not confirmed saved. Retry with the same ID or discard it. No transaction was executed." to
+            "ذخیره درخواست قبلی تأیید نشده است. می‌توانید با همان شناسه دوباره تلاش کنید یا صریحاً کنار بگذارید. هیچ تراکنشی ثبت نشده است.",
+        "Retry same financial request" to "تلاش دوباره با همان درخواست",
+        "Discard and create a new request" to "کنارگذاشتن و ایجاد درخواست جدید",
+        "Unreadable pending financial request" to "درخواست مالی ذخیره‌شده غیرقابل‌خواندن است",
+        "A previously prepared financial request could not be verified. No new request may be created until you explicitly discard the damaged local draft. Nothing was applied." to
+            "درخواست مالی قبلی قابل تأیید نیست. تا زمانی که درخواست آسیب‌دیده را صریحاً کنار نگذارید، درخواست جدید ساخته نمی‌شود. هیچ تراکنشی ثبت نشده است.",
+        "Discard damaged draft" to "کنارگذاشتن درخواست آسیب‌دیده",
 
         "View Windows Core Snapshot (Read-only)" to "پیش‌نمایش فقط‌خواندنی دادهٔ ویندوز",
         "Windows Core Preview (Read-only)" to "پیش‌نمایش فقط‌خواندنی ویندوز",
