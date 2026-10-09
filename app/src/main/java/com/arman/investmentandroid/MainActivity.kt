@@ -5441,6 +5441,8 @@ class MainActivity : Activity() {
                         label = "Inspecting Windows Core snapshot",
                         task = { CoreSnapshotPreview.inspect(readUriText(uri)) },
                         onSuccess = { summary ->
+                            // Bound only the text viewport to the screen. Keep
+                            // Close and proposal actions visible on smaller phones.
                             val scroll = ScrollView(this).apply {
                                 addView(TextView(this@MainActivity).apply {
                                     text = summary.display(uiLanguage() == "fa")
@@ -5450,19 +5452,38 @@ class MainActivity : Activity() {
                                     setTextIsSelectable(true)
                                 })
                             }
+                            val content = LinearLayout(this).apply {
+                                orientation = LinearLayout.VERTICAL
+                                addView(
+                                    scroll,
+                                    LinearLayout.LayoutParams(
+                                        ViewGroup.LayoutParams.MATCH_PARENT,
+                                        minOf(dp(400), (resources.displayMetrics.heightPixels * 0.43).toInt())
+                                    )
+                                )
+                            }
                             val previewDialog = AlertDialog.Builder(this)
                                 .setTitle(ui("Windows Core Preview (Read-only)"))
-                                .setView(scroll)
+                                .setView(content)
                                 .setPositiveButton(ui("Close"), null)
+                                .create()
                             if (summary.policy != null) {
-                                previewDialog.setNeutralButton(
-                                    ui("Prepare target request")
-                                ) { _, _ -> showCorePolicyProposalEditor(summary) }
                                 if (summary.cashBalances.isNotEmpty()) {
-                                    previewDialog.setNegativeButton(
-                                        ui("Prepare financial request")
-                                    ) { _, _ -> chooseCoreFinancialRequest(summary) }
+                                    content.addView(Button(this).apply {
+                                        text = ui("Prepare financial request")
+                                        setOnClickListener {
+                                            previewDialog.dismiss()
+                                            chooseCoreFinancialRequest(summary)
+                                        }
+                                    })
                                 }
+                                content.addView(Button(this).apply {
+                                    text = ui("Prepare target request")
+                                    setOnClickListener {
+                                        previewDialog.dismiss()
+                                        showCorePolicyProposalEditor(summary)
+                                    }
+                                })
                             }
                             previewDialog.show()
                         },
