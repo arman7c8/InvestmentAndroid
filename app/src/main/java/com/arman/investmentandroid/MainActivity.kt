@@ -128,6 +128,9 @@ class MainActivity : Activity() {
     private val cloudSyncHandler = Handler(Looper.getMainLooper())
     private var cloudSyncRunnable: Runnable? = null
     private val cloudExecutor = Executors.newSingleThreadExecutor()
+    private val aiExecutor = Executors.newSingleThreadExecutor()
+    private val chatGptPlanClient by lazy { ChatGptPlanClient(this) }
+    private val aiRecommendationJournal by lazy { AiRecommendationJournal(this) }
     private val cloudOperationInProgress = AtomicBoolean(false)
     private val priceUpdateInProgress = AtomicBoolean(false)
 
@@ -192,6 +195,7 @@ class MainActivity : Activity() {
         stopAutoRefresh()
         stopSmartCloudSync()
         cloudExecutor.shutdownNow()
+        aiExecutor.shutdownNow()
         super.onDestroy()
     }
 
@@ -1134,6 +1138,212 @@ class MainActivity : Activity() {
             .show()
     }
 
+    private fun buildAiAdvisorSnapshot(atlasContext: AiAdvisorContract.AtlasContext? = null): JSONObject {
+        val assets = loadAssets().filter { it.includeInTarget }
+        if (assets.isEmpty()) {
+            throw IllegalStateException("No assets are included in target allocation.")
+        }
+        val totalTarget = assets.sumOf { it.targetPercent }
+        if (kotlin.math.abs(totalTarget - 100.0) > 0.01) {
+            throw IllegalStateException("Target allocation must total 100% before AI analysis.")
+        }
+        val targetValue = assets.sumOf { it.value }
+        if (!targetValue.isFinite() || targetValue <= 0.0) {
+            throw IllegalStateException("Target portfolio has no current value to analyze.")
+        }
+
+        val allocations = assets.mapIndexed { index, asset ->
+            val currentPct = asset.value / targetValue * 100.0
+            val publicKey = when {
+                asset.symbol.isNotBlank() -> asset.symbol
+                asset.sourceAssetId.isNotBlank() -> asset.sourceAssetId
+                asset.sharedId.isNotBlank() -> asset.sharedId
+                else -> asset.category.uppercase(Locale.US)
+                    .replace(Regex("[^A-Z0-9]+"), "-")
+                    .trim('-') + "-" + (index + 1)
+            }
+            val performancePct = if (
+                asset.category != "Cash" &&
+                asset.averageCost.isFinite() &&
+                asset.averageCost > 0.0 &&
+                asset.price.isFinite()
+            ) {
+                (asset.price / asset.averageCost - 1.0) * 100.0
+            } else {
+                null
+            }
+            AiAdvisorContract.Allocation(
+                scope = "portfolio_asset",
+                publicKey = publicKey,
+                currentPct = currentPct,
+                targetPct = asset.targetPercent,
+                performancePct = performancePct
+            )
+        }
+
+        return AiAdvisorContract.buildSnapshot(
+            allocations = allocations,
+            recommendationHistory = aiRecommendationJournal.compactHistory(),
+            atlasContext = atlasContext,
+            generatedAt = java.time.Instant.now().toString()
+        )
+    }
+
+    private fun showAiAdvisorDialog() {
+        if (!chatGptPlanClient.isConnected()) {
+            AlertDialog.Builder(this)
+                .setTitle(ui("AI Advisor"))
+                .setMessage(ui("Connect ChatGPT in Settings first."))
+                .setNegativeButton(ui("Close"), null)
+                .setPositiveButton(ui("Open Settings")) { _, _ -> showSettingsDialog() }
+                .show()
+            return
+        }
+
+        try {
+            buildAiAdvisorSnapshot()
+        } catch (exc: Exception) {
+            Toast.makeText(
+                this,
+                ui(exc.message ?: "Portfolio is not ready for AI analysis."),
+                Toast.LENGTH_LONG
+            ).show()
+            return
+        }
+
+        var currentRecordId: String? = null
+        val status = TextView(this).apply {
+            text = ui("Analyzing allocation with ChatGPT…")
+            textSize = 15f
+            setPadding(dp(20), dp(16), dp(20), dp(16))
+        }
+        val dialog = AlertDialog.Builder(this)
+            .setTitle(ui("AI Advisor"))
+            .setView(status)
+            .setNegativeButton(ui("Close"), null)
+            .setNeutralButton(ui("Reject"), null)
+            .setPositiveButton(ui("Accept for tracking"), null)
+            .create()
+        dialog.setOnShowListener {
+            val accept = dialog.getButton(AlertDialog.BUTTON_POSITIVE)
+            val reject = dialog.getButton(AlertDialog.BUTTON_NEUTRAL)
+            accept.isEnabled = false
+            reject.isEnabled = false
+
+            accept.setOnClickListener {
+                val id = currentRecordId ?: return@setOnClickListener
+                runCatching {
+                    aiRecommendationJournal.setDecision(id, "accepted")
+                }.onSuccess {
+                    Toast.makeText(
+                        this,
+                        ui("Recommendation accepted for outcome tracking. Targets were not changed."),
+                        Toast.LENGTH_LONG
+                    ).show()
+                    accept.isEnabled = false
+                    reject.isEnabled = false
+                }.onFailure { error ->
+                    Toast.makeText(
+                        this,
+                        ui(error.message ?: "Could not save AI decision."),
+                        Toast.LENGTH_LONG
+                    ).show()
+                }
+            }
+
+            reject.setOnClickListener {
+                val id = currentRecordId ?: return@setOnClickListener
+                runCatching {
+                    aiRecommendationJournal.setDecision(id, "rejected")
+                }.onSuccess {
+                    Toast.makeText(
+                        this,
+                        ui("Recommendation rejected and recorded."),
+                        Toast.LENGTH_SHORT
+                    ).show()
+                    accept.isEnabled = false
+                    reject.isEnabled = false
+                }.onFailure { error ->
+                    Toast.makeText(
+                        this,
+                        ui(error.message ?: "Could not save AI decision."),
+                        Toast.LENGTH_LONG
+                    ).show()
+                }
+            }
+        }
+        dialog.show()
+
+        aiExecutor.execute {
+            val result = runCatching {
+                val atlas = AtlasMarketContext.loadOrNull()
+                val snapshot = buildAiAdvisorSnapshot(atlas)
+                val model = chatGptPlanClient.availableModels().first()
+                val recommendation = chatGptPlanClient.analyzeSnapshot(snapshot, model.slug)
+                val record = aiRecommendationJournal.recordRecommendation(
+                    snapshot = snapshot,
+                    recommendation = recommendation,
+                    model = model.slug
+                )
+                arrayOf(model, recommendation, atlas != null, record)
+            }
+            runOnUiThread {
+                result.onSuccess { values ->
+                    val model = values[0] as ChatGptPlanClient.Model
+                    val recommendation = values[1] as JSONObject
+                    val atlasUsed = values[2] as Boolean
+                    val record = values[3] as JSONObject
+                    currentRecordId = record.getString("recommendation_id")
+                    val targets = recommendation.getJSONArray("suggested_targets")
+                    val body = buildString {
+                        append(recommendation.optString("summary", ""))
+                        append("\n\n")
+                        append("Market risk: ")
+                        append(recommendation.optString("market_risk", "unknown"))
+                        append("  •  Portfolio risk: ")
+                        append(recommendation.optString("portfolio_risk", "unknown"))
+                        append("\nConfidence: ")
+                        append(String.format(Locale.US, "%.0f%%", recommendation.optDouble("confidence_pct", 0.0)))
+                        append("\nModel: ")
+                        append(model.displayName)
+                        append("\nAtlas: ")
+                        append(if (atlasUsed) "current market context included" else "unavailable or stale")
+                        append("\n\nSuggested targets:\n")
+                        for (index in 0 until targets.length()) {
+                            val row = targets.getJSONObject(index)
+                            if (row.optString("scope") != "portfolio_asset") continue
+                            append("• ")
+                            append(row.optString("public_key"))
+                            append(": ")
+                            append(String.format(
+                                Locale.US,
+                                "%.1f%% → %.1f%%",
+                                row.optDouble("current_pct"),
+                                row.optDouble("suggested_pct")
+                            ))
+                            val reason = row.optString("reason")
+                            if (reason.isNotBlank()) {
+                                append(" — ")
+                                append(reason)
+                            }
+                            append("\n")
+                        }
+                        append("\nReview after ")
+                        append(recommendation.optInt("review_after_days", 7))
+                        append(" days.")
+                        append("\n\nAccept stores this recommendation for future outcome tracking. ")
+                        append("It does not change any target.")
+                    }
+                    status.text = body
+                    dialog.getButton(AlertDialog.BUTTON_POSITIVE)?.isEnabled = true
+                    dialog.getButton(AlertDialog.BUTTON_NEUTRAL)?.isEnabled = true
+                }.onFailure { error ->
+                    status.text = ui(error.message ?: "AI analysis failed.")
+                }
+            }
+        }
+    }
+
     private fun buildPrivacySafeAiSummary(): String {
         val assets = loadAssets()
         val totalValue = assets.sumOf { it.value }
@@ -1346,6 +1556,13 @@ class MainActivity : Activity() {
             setOnClickListener { showTargetsDialog() }
         }
 
+        val aiAdvisorButton = Button(this).apply {
+            text = ui("AI Advisor")
+            isAllCaps = false
+            textSize = 16f
+            setOnClickListener { showAiAdvisorDialog() }
+        }
+
         val toleranceButton = Button(this).apply {
             text = String.format(Locale.US, ui("Tolerance: ±%.1f%%"), tolerance)
             isAllCaps = false
@@ -1471,6 +1688,23 @@ class MainActivity : Activity() {
             }
         )
         container.addView(primaryRow, buttonParams)
+
+        val advisorRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+        }
+        advisorRow.addView(
+            targetsButton,
+            LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply {
+                marginEnd = dp(5)
+            }
+        )
+        advisorRow.addView(
+            aiAdvisorButton,
+            LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply {
+                marginStart = dp(5)
+            }
+        )
+        container.addView(advisorRow, buttonParams)
 
         val secondaryRow = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
@@ -1910,9 +2144,96 @@ class MainActivity : Activity() {
         }
     }
 
+    private fun showAiRecommendationHistoryDialog() {
+        val records = try {
+            aiRecommendationJournal.listRecords().asReversed()
+        } catch (exc: Exception) {
+            Toast.makeText(
+                this,
+                ui(exc.message ?: "Could not read AI recommendation history."),
+                Toast.LENGTH_LONG
+            ).show()
+            return
+        }
+
+        if (records.isEmpty()) {
+            Toast.makeText(
+                this,
+                ui("No AI recommendations have been recorded yet."),
+                Toast.LENGTH_SHORT
+            ).show()
+            return
+        }
+
+        val scroll = ScrollView(this)
+        val body = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(18), dp(12), dp(18), dp(12))
+        }
+        scroll.addView(body)
+
+        records.take(30).forEach { record ->
+            val recommendation = record.optJSONObject("recommendation")
+            val outcome = record.optJSONObject("outcome")
+            val label = buildString {
+                append(record.optString("created_at").take(19).replace("T", " "))
+                append("  •  ")
+                append(record.optString("status", "pending").uppercase(Locale.US))
+                if (record.optString("applied_at").isNotBlank()) append(" · APPLIED")
+                append("\n")
+                append(recommendation?.optString("summary", "") ?: "")
+                append("\nConfidence: ")
+                append(String.format(
+                    Locale.US,
+                    "%.0f%%",
+                    recommendation?.optDouble("confidence_pct", 0.0) ?: 0.0
+                ))
+                append("  •  Review: ")
+                append(record.optString("review_due_at").take(10))
+                if (outcome != null) {
+                    append("\nObserved outcome: ")
+                    append(String.format(
+                        Locale.US,
+                        "%+.2f%%",
+                        outcome.optDouble("portfolio_return_pct", 0.0)
+                    ))
+                    append(" · flow-adjusted by Windows Core")
+                } else if (record.optString("status") == "accepted") {
+                    append("\nAwaiting Windows Core outcome evaluation")
+                }
+            }
+            body.addView(
+                TextView(this).apply {
+                    text = label
+                    textSize = 14f
+                    setTextColor(Color.DKGRAY)
+                    setPadding(dp(12), dp(10), dp(12), dp(10))
+                    background = GradientDrawable().apply {
+                        setColor(Color.WHITE)
+                        cornerRadius = dp(10).toFloat()
+                        setStroke(dp(1), Color.rgb(225, 225, 225))
+                    }
+                },
+                LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.WRAP_CONTENT
+                ).apply {
+                    bottomMargin = dp(8)
+                }
+            )
+        }
+
+        AlertDialog.Builder(this)
+            .setTitle(ui("AI Recommendation History"))
+            .setView(scroll)
+            .setPositiveButton(ui("Close"), null)
+            .show()
+    }
+
     private fun showToolsDialog() {
         val options = arrayOf(
             "AI Portfolio Summary",
+            "AI Recommendation History",
             "Google Drive / Cloud Backup",
             "Edit Targets",
             "Rebalance Tolerance",
@@ -1929,15 +2250,16 @@ class MainActivity : Activity() {
             .setItems(options.map(::ui).toTypedArray()) { _, which ->
                 when (which) {
                     0 -> sharePrivacySafeAiSummary()
-                    1 -> showCloudBackupDialog()
-                    2 -> showTargetsDialog()
-                    3 -> showToleranceDialog()
-                    4 -> showHistoryDialog()
-                    5 -> showCategoryManagerDialog()
-                    6 -> showAppLockDialog()
-                    7 -> showSettingsDialog()
-                    8 -> showBackupDialog()
-                    9 -> showResetDemoDialog()
+                    1 -> showAiRecommendationHistoryDialog()
+                    2 -> showCloudBackupDialog()
+                    3 -> showTargetsDialog()
+                    4 -> showToleranceDialog()
+                    5 -> showHistoryDialog()
+                    6 -> showCategoryManagerDialog()
+                    7 -> showAppLockDialog()
+                    8 -> showSettingsDialog()
+                    9 -> showBackupDialog()
+                    10 -> showResetDemoDialog()
                 }
             }
             .setNegativeButton(ui("Close"), null)
@@ -2243,6 +2565,122 @@ class MainActivity : Activity() {
             summaryPeriods.indexOf(loadSummaryPeriod()).let { if (it >= 0) it else 2 }
         )
         form.addView(periodSpinner)
+
+        addLabel("AI Advisor · ChatGPT")
+        val aiStatus = TextView(this).apply {
+            text = ui(
+                if (chatGptPlanClient.isConnected())
+                    "Connected · ChatGPT plan"
+                else
+                    "Not connected"
+            )
+            textSize = 13f
+            setTextColor(Color.DKGRAY)
+            setPadding(0, dp(2), 0, dp(6))
+        }
+        form.addView(aiStatus)
+
+        val aiButtons = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+        }
+        val aiConnectButton = Button(this).apply {
+            text = ui(
+                if (chatGptPlanClient.isConnected())
+                    "Test ChatGPT"
+                else
+                    "Continue with ChatGPT"
+            )
+        }
+        val aiDisconnectButton = Button(this).apply {
+            text = ui("Disconnect")
+            visibility = if (chatGptPlanClient.isConnected()) View.VISIBLE else View.GONE
+        }
+        aiButtons.addView(aiConnectButton)
+        aiButtons.addView(aiDisconnectButton)
+        form.addView(aiButtons)
+
+        fun refreshAiControls(message: String? = null) {
+            val connected = chatGptPlanClient.isConnected()
+            aiStatus.text = ui(
+                message ?: if (connected)
+                    "Connected · ChatGPT plan"
+                else
+                    "Not connected"
+            )
+            aiConnectButton.text = ui(
+                if (connected) "Test ChatGPT" else "Continue with ChatGPT"
+            )
+            aiDisconnectButton.visibility = if (connected) View.VISIBLE else View.GONE
+            aiConnectButton.isEnabled = true
+            aiDisconnectButton.isEnabled = true
+        }
+
+        aiConnectButton.setOnClickListener {
+            aiConnectButton.isEnabled = false
+            aiDisconnectButton.isEnabled = false
+            if (!chatGptPlanClient.isConnected()) {
+                aiStatus.text = ui("Complete ChatGPT sign-in in your browser…")
+                chatGptPlanClient.authorize(
+                    this,
+                    aiExecutor,
+                    java.util.concurrent.Executor { command -> runOnUiThread(command) }
+                ) { result ->
+                    result.onSuccess { connected ->
+                        val firstModel = connected.models.firstOrNull()
+                        if (firstModel == null) {
+                            refreshAiControls("Connected, but no ChatGPT plan model is available.")
+                        } else {
+                            aiStatus.text = ui("Connected · testing ChatGPT plan…")
+                            aiExecutor.execute {
+                                val probe = runCatching {
+                                    chatGptPlanClient.testConnection(firstModel.slug)
+                                }
+                                runOnUiThread {
+                                    probe.onSuccess {
+                                        refreshAiControls("Connected ✓ · AI test passed")
+                                    }.onFailure { error ->
+                                        refreshAiControls(
+                                            error.message ?: "ChatGPT connection test failed."
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }.onFailure { error ->
+                        refreshAiControls(
+                            error.message ?: "ChatGPT connection failed. Retry sign-in."
+                        )
+                    }
+                }
+            } else {
+                aiStatus.text = ui("Testing ChatGPT plan connection…")
+                aiExecutor.execute {
+                    val probe = runCatching {
+                        val model = chatGptPlanClient.availableModels().first()
+                        chatGptPlanClient.testConnection(model.slug)
+                    }
+                    runOnUiThread {
+                        probe.onSuccess {
+                            refreshAiControls("Connected ✓ · AI test passed")
+                        }.onFailure { error ->
+                            refreshAiControls(
+                                error.message ?: "ChatGPT connection test failed."
+                            )
+                        }
+                    }
+                }
+            }
+        }
+
+        aiDisconnectButton.setOnClickListener {
+            chatGptPlanClient.disconnect()
+            refreshAiControls()
+            Toast.makeText(
+                this,
+                ui("ChatGPT disconnected from Investment."),
+                Toast.LENGTH_SHORT
+            ).show()
+        }
 
         addLabel("Automatic Nobitex refresh while app is open")
         val refreshSpinner = Spinner(this)
@@ -4090,6 +4528,10 @@ class MainActivity : Activity() {
             }
         }
         root.put("androidBackup", PortfolioSafety.preserveSupplementalFields(localSupplement, remoteSupplement))
+        root.put(
+            "aiJournal",
+            aiRecommendationJournal.mergeDocument(root.optJSONObject("aiJournal"))
+        )
         return root
     }
 
@@ -4346,6 +4788,11 @@ class MainActivity : Activity() {
                             false  // Report a conflict rather than crashing the UI callback.
                         }
                         if (historyMatches) {
+                            runCatching {
+                                aiRecommendationJournal.mergeDocument(
+                                    JSONObject(result.raw).optJSONObject("aiJournal")
+                                )
+                            }
                             saveCloudBaseline(result.remote)
                             markCloudSync()
                         } else {
@@ -4535,19 +4982,17 @@ class MainActivity : Activity() {
                             val historyMatches = PortfolioSafety.historyEquivalent(
                                 buildAndroidBackupPayload(), validated.androidPayload
                             )
-                            return@runStorageOperation if (historyMatches) {
-                                CloudSyncResult(
-                                    action = CloudSyncAction.MATCH,
-                                    remote = remoteShared
-                                )
-                            } else {
-                                CloudSyncResult(
+                            if (!historyMatches) {
+                                return@runStorageOperation CloudSyncResult(
                                     action = CloudSyncAction.CONFLICT,
                                     local = localShared,
                                     remote = remoteShared,
                                     historyOnly = true
                                 )
                             }
+                            // Holdings/history match. Fall through to a revision-safe
+                            // write so the independently mergeable AI journal is synced.
+                            Unit
                         }
                         PortfolioSafety.SyncDecision.LOAD_REMOTE ->
                             return@runStorageOperation CloudSyncResult(
@@ -5044,6 +5489,7 @@ class MainActivity : Activity() {
 
         check(committed) { "Android could not save the restored portfolio. Local data was not changed." }
 
+        aiRecommendationJournal.mergeDocument(validated.root.optJSONObject("aiJournal"))
         scheduleAutoRefresh()
     }
 
@@ -5084,6 +5530,7 @@ class MainActivity : Activity() {
             put("updatedAt", System.currentTimeMillis())
             put("sharedPortfolio", buildSharedPortfolio())
             put("androidBackup", buildAndroidBackupPayload())
+            put("aiJournal", aiRecommendationJournal.exportDocument())
         }.toString(2)
     }
 
