@@ -1137,7 +1137,7 @@ class MainActivity : Activity() {
             .show()
     }
 
-    private fun buildAiAdvisorSnapshot(): JSONObject {
+    private fun buildAiAdvisorSnapshot(atlasContext: AiAdvisorContract.AtlasContext? = null): JSONObject {
         val assets = loadAssets().filter { it.includeInTarget }
         if (assets.isEmpty()) {
             throw IllegalStateException("No assets are included in target allocation.")
@@ -1182,6 +1182,7 @@ class MainActivity : Activity() {
 
         return AiAdvisorContract.buildSnapshot(
             allocations = allocations,
+            atlasContext = atlasContext,
             generatedAt = java.time.Instant.now().toString()
         )
     }
@@ -1197,7 +1198,7 @@ class MainActivity : Activity() {
             return
         }
 
-        val snapshot = try {
+        try {
             buildAiAdvisorSnapshot()
         } catch (exc: Exception) {
             Toast.makeText(
@@ -1222,13 +1223,16 @@ class MainActivity : Activity() {
 
         aiExecutor.execute {
             val result = runCatching {
+                val atlas = AtlasMarketContext.loadOrNull()
+                val snapshot = buildAiAdvisorSnapshot(atlas)
                 val model = chatGptPlanClient.availableModels().first()
-                model to chatGptPlanClient.analyzeSnapshot(snapshot, model.slug)
+                Triple(model, chatGptPlanClient.analyzeSnapshot(snapshot, model.slug), atlas != null)
             }
             runOnUiThread {
                 result.onSuccess { pair ->
                     val model = pair.first
                     val recommendation = pair.second
+                    val atlasUsed = pair.third
                     val targets = recommendation.getJSONArray("suggested_targets")
                     val body = buildString {
                         append(recommendation.optString("summary", ""))
@@ -1241,6 +1245,8 @@ class MainActivity : Activity() {
                         append(String.format(Locale.US, "%.0f%%", recommendation.optDouble("confidence_pct", 0.0)))
                         append("\nModel: ")
                         append(model.displayName)
+                        append("\nAtlas: ")
+                        append(if (atlasUsed) "current market context included" else "unavailable or stale")
                         append("\n\nSuggested targets:\n")
                         for (index in 0 until targets.length()) {
                             val row = targets.getJSONObject(index)
