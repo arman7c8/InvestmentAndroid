@@ -344,6 +344,21 @@ class PortfolioSafetyTest {
     }
 
     @Test
+    fun importedWindowsCoreIdsAndLegacySourceMarkersRemainReadOnly() {
+        val cases = listOf(
+            asset(id = "windows:crypto:btc"),
+            asset().put("sourcePlatform", "windows-core"),
+            asset().put("sharedId", "windows:crypto:btc")
+        )
+        for (item in cases) {
+            val portfolio = JSONObject().put("assets", JSONArray().put(item))
+            assertThrows(IllegalArgumentException::class.java) {
+                PortfolioSafety.requireEditableAndroidPortfolio(portfolio)
+            }
+        }
+    }
+
+    @Test
     fun normalAndroidPortfolioRemainsEditable() {
         val portfolio = sharedDocument().getJSONObject("sharedPortfolio")
         PortfolioSafety.requireEditableAndroidPortfolio(portfolio)
