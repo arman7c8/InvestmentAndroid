@@ -216,6 +216,25 @@ class AiRecommendationJournal private constructor(private val file: File) {
         throw JournalException("AI recommendation was not found.")
     }
 
+    fun markApplied(
+        recommendationId: String,
+        appliedAt: Instant = Instant.now()
+    ): JSONObject {
+        val root = loadRoot()
+        val records = root.getJSONArray("records")
+        for (index in 0 until records.length()) {
+            val record = records.getJSONObject(index)
+            if (record.optString("recommendation_id") != recommendationId) continue
+            if (record.optString("status") != "accepted") {
+                throw JournalException("Accept the recommendation before applying its targets.")
+            }
+            record.put("applied_at", appliedAt.toString())
+            saveRoot(root)
+            return JSONObject(record.toString())
+        }
+        throw JournalException("AI recommendation was not found.")
+    }
+
     fun recordOutcome(
         recommendationId: String,
         portfolioReturnPct: Double,
@@ -260,6 +279,7 @@ class AiRecommendationJournal private constructor(private val file: File) {
                 recommendationId = record.getString("recommendation_id"),
                 ageDays = ageDays,
                 accepted = record.optString("status") == "accepted",
+                applied = record.optString("applied_at").isNotBlank(),
                 outcomePct = outcome?.optDouble("portfolio_return_pct")
                     ?.takeIf { it.isFinite() }
             )
