@@ -51,6 +51,21 @@ Do not upload or publish it, or include it as a sample test asset.
 - Offline Android Core policy and financial request exporters remain
   unapplied drafts; no buy/sell/cash command is accepted on Windows yet.
 
+## Market-price and USDT valuation parity
+
+An additional integrity gate independently reconstructs the **latest quote**
+for each Core asset by (observed_at, SQLite rowid), then recursively values
+native-currency quotes against the latest reference price, exactly like
+Windows Core latest_price. It compares each displayed holding value against
+(quantity × current quote), including zero-quantity and missing-price cases.
+A forged amount is rejected even if the JSON SHA-256 is recomputed to match
+it. Circular/unknown FX references and non-finite valuations are rejected.
+
+Windows exporter Draft PR #163 has been updated to match this quote policy.
+The previously delivered October 8 and October 9 JSON previews were checked
+independently against this rule and both matched. Newly exported snapshots
+need another on-device acceptance after the updated APK is built.
+
 ## Validation and next steps
 
 Real Android v0.32 installed preview of the October 9 Core v11 snapshot
