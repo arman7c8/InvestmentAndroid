@@ -119,7 +119,7 @@ object WindowsCoreHome {
             }.toDouble().also { require(it.isFinite()) }
 
         val missing = items.count { it.valueToman == null && it.quantity != 0.0 }
-        return Overview(
+        val result = Overview(
             sha256 = verified.sha,
             schema = verified.schema,
             transactionCount = verified.transactions,
@@ -130,5 +130,9 @@ object WindowsCoreHome {
             missingPriceCount = missing,
             nonTargetAssetsToman = nonTargetAssetsToman
         )
+        require(result.partialValueToman.isFinite()) {
+            "Windows Core total net worth is outside the supported range."
+        }
+        return result
     }
 }
