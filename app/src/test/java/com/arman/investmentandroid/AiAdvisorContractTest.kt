@@ -67,6 +67,39 @@ class AiAdvisorContractTest {
         assertTrue(!privacy.getBoolean("personal_identity_included"))
     }
 
+    @Test
+    fun portfolioScopeIsExplicitButContainsNoPrivateFinancialIdentity() {
+        val android = AiAdvisorContract.buildSnapshot(
+            allocations = listOf(
+                AiAdvisorContract.Allocation("portfolio_asset", "BTC", 100.0, 100.0)
+            ),
+            generatedAt = "2026-10-10T12:00:00Z",
+            portfolioScope = "android-local"
+        )
+        val windows = AiAdvisorContract.buildSnapshot(
+            allocations = listOf(
+                AiAdvisorContract.Allocation("portfolio_asset", "BTC", 100.0, 100.0)
+            ),
+            generatedAt = "2026-10-10T12:00:00Z",
+            portfolioScope = "windows-core-readonly"
+        )
+        AiAdvisorContract.assertSnapshotSafe(android)
+        AiAdvisorContract.assertSnapshotSafe(windows)
+        assertEquals("android-local", android.getString("portfolio_scope"))
+        assertEquals("windows-core-readonly", windows.getString("portfolio_scope"))
+        assertFalse(windows.toString().contains("bank_account"))
+    }
+
+    @Test(expected = AiAdvisorContract.ContractException::class)
+    fun unsupportedPortfolioScopeIsRejected() {
+        val snapshot = AiAdvisorContract.buildSnapshot(
+            allocations = emptyList(),
+            generatedAt = "2026-10-10T12:00:00Z"
+        )
+        snapshot.put("portfolio_scope", "private-bank-123")
+        AiAdvisorContract.assertSnapshotSafe(snapshot)
+    }
+
     @Test(expected = AiAdvisorContract.ContractException::class)
     fun invalidPercentageFailsClosed() {
         AiAdvisorContract.buildSnapshot(
