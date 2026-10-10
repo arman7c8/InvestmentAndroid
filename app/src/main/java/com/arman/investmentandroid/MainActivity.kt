@@ -1059,6 +1059,7 @@ class MainActivity : Activity() {
 
     private fun scheduleAutoRefresh() {
         stopAutoRefresh()
+        if (localDataProblem() != null) return
         // Windows Core home never performs background edits on Android's
         // unrelated local portfolio while the read-only copy is displayed.
         if (isWindowsCoreHomeSelected()) return
@@ -1351,6 +1352,73 @@ class MainActivity : Activity() {
         startActivity(Intent.createChooser(intent, "Share AI Portfolio Summary"))
     }
 
+    /** A damaged preference must never be mistaken for an empty portfolio. */
+    private fun localDataProblem(): String? {
+        val prefs = getSharedPreferences(prefsName, MODE_PRIVATE)
+        val assets = prefs.getString(assetsKey, null)
+        if (assets == null || !isValidLocalAssetsJson(assets)) {
+            return "Stored Android assets could not be verified."
+        }
+        return try {
+            LocalHistorySafety.requireReadableBeforeOverwrite(
+                prefs.getString(transactionsKey, null)
+            )
+            SnapshotHistorySafety.requireReadableBeforeOverwrite(
+                prefs.getString(snapshotsKey, null)
+            )
+            null
+        } catch (error: Exception) {
+            error.message ?: "Stored Android portfolio history could not be verified."
+        }
+    }
+
+    /**
+     * Recovery-only UI: no trading, refresh, reset, import-by-guess or cloud
+     * writes. Preserve original bytes for assisted, verified recovery.
+     */
+    private fun showLocalStorageProtectionScreen(reason: String) {
+        onPortfolioScreen = false
+        onPriceCenterScreen = false
+        stopAutoRefresh()
+        stopSmartCloudSync()
+        val root = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(22), dp(24), dp(22), dp(24))
+            setBackgroundColor(PortfolioAppearance.BACKGROUND)
+        }
+        root.addView(TextView(this).apply {
+            text = ui("Local data protection")
+            textSize = 23f
+            setTypeface(typeface, Typeface.BOLD)
+            setTextColor(PortfolioAppearance.ERROR)
+        })
+        root.addView(TextView(this).apply {
+            text = ui("Stored Android data was not changed. Editing and sync are disabled until this data is safely recovered.") +
+                "\n\n" + reason
+            textSize = 15f
+            setTextColor(PortfolioAppearance.TEXT_PRIMARY)
+            setPadding(0, dp(14), 0, dp(20))
+        })
+        root.addView(Button(this).apply {
+            text = ui("Check local data again")
+            isAllCaps = false
+            setOnClickListener { showPortfolioScreen() }
+        })
+        if (windowsCoreCacheFile().isFile) {
+            root.addView(Button(this).apply {
+                text = ui("Show Windows Portfolio (Read-only)")
+                isAllCaps = false
+                setOnClickListener {
+                    if (!mayEnterWindowsCoreHome()) return@setOnClickListener
+                    getSharedPreferences(prefsName, MODE_PRIVATE).edit()
+                        .putBoolean(windowsCoreHomeKey, true).apply()
+                    showPortfolioScreen()
+                }
+            })
+        }
+        showContentRespectingSystemBars(ScrollView(this).apply { addView(root) })
+    }
+
     private fun showPortfolioScreen() {
         if (isWindowsCoreHomeSelected()) {
             try {
@@ -1369,6 +1437,10 @@ class MainActivity : Activity() {
                     Toast.LENGTH_LONG
                 ).show()
             }
+        }
+        localDataProblem()?.let {
+            showLocalStorageProtectionScreen(it)
+            return
         }
         onPortfolioScreen = true
         onPriceCenterScreen = false
@@ -3282,6 +3354,10 @@ class MainActivity : Activity() {
     }
 
     private fun showPriceCenterScreen() {
+        localDataProblem()?.let {
+            showLocalStorageProtectionScreen(it)
+            return
+        }
         onPortfolioScreen = false
         onPriceCenterScreen = true
         val assets = loadAssets()
@@ -4220,6 +4296,7 @@ class MainActivity : Activity() {
 
     private fun scheduleSmartCloudSync() {
         stopSmartCloudSync()
+        if (localDataProblem() != null) return
         if (isWindowsCoreHomeSelected()) return
         if (!isCloudAutoSyncEnabled() || loadCloudBackupUri() == null) {
             return
