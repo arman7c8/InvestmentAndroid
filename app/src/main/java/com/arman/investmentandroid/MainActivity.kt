@@ -2521,7 +2521,7 @@ class MainActivity : Activity() {
             val input = EditText(this).apply {
                 hint = ui("Target %")
                 inputType = InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_FLAG_DECIMAL
-                setText(formatQuantity(asset.targetPercent))
+                setText(EditableFinancialNumber.format(asset.targetPercent))
             }
             inputs.add(index to input)
             form.addView(input)
@@ -2589,7 +2589,7 @@ class MainActivity : Activity() {
         val input = EditText(this).apply {
             hint = ui("Tolerance (%)")
             inputType = InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_FLAG_DECIMAL
-            setText(formatQuantity(loadTolerance()))
+            setText(EditableFinancialNumber.format(loadTolerance()))
             setPadding(dp(20), dp(8), dp(20), 0)
         }
 
@@ -2736,19 +2736,19 @@ class MainActivity : Activity() {
         val quantityInput = EditText(this).apply {
             hint = ui("Quantity")
             inputType = InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_FLAG_DECIMAL
-            setText(existing?.let { formatQuantity(it.quantity).replace(",", "") } ?: "")
+            setText(existing?.let { EditableFinancialNumber.format(it.quantity) } ?: "")
         }
 
         val priceInput = EditText(this).apply {
             hint = ui("Current price per unit (Toman)")
             inputType = InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_FLAG_DECIMAL
-            setText(existing?.let { it.price.toLong().toString() } ?: "")
+            setText(existing?.let { EditableFinancialNumber.format(it.price) } ?: "")
         }
 
         val averageCostInput = EditText(this).apply {
             hint = ui("Average cost per unit (Toman)")
             inputType = InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_FLAG_DECIMAL
-            setText(existing?.let { it.averageCost.toLong().toString() } ?: "")
+            setText(existing?.let { EditableFinancialNumber.format(it.averageCost) } ?: "")
         }
 
         val priceSourceSpinner = Spinner(this)
@@ -2779,7 +2779,7 @@ class MainActivity : Activity() {
         val targetInput = EditText(this).apply {
             hint = ui("Target allocation (%)")
             inputType = InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_FLAG_DECIMAL
-            setText(existing?.let { formatQuantity(it.targetPercent) } ?: "0")
+            setText(existing?.let { EditableFinancialNumber.format(it.targetPercent) } ?: "0")
         }
 
         form.addView(nameInput)
@@ -3118,7 +3118,7 @@ class MainActivity : Activity() {
         val priceInput = EditText(this).apply {
             hint = ui("Transaction price per unit (Toman)")
             inputType = InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_FLAG_DECIMAL
-            setText(asset.price.toLong().toString())
+            setText(EditableFinancialNumber.format(asset.price))
         }
 
         form.addView(quantityInput)
@@ -3301,7 +3301,7 @@ class MainActivity : Activity() {
             val input = EditText(this).apply {
                 hint = ui("Current price (Toman)")
                 inputType = InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_FLAG_DECIMAL
-                setText(asset.price.toLong().toString())
+                setText(EditableFinancialNumber.format(asset.price))
             }
 
             inputs.add(index to input)
@@ -3590,7 +3590,7 @@ class MainActivity : Activity() {
         val input = EditText(this).apply {
             hint = ui("Final balance (Toman)")
             inputType = InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_FLAG_DECIMAL
-            setText(asset.value.toLong().toString())
+            setText(EditableFinancialNumber.format(asset.value))
             setPadding(dp(20), dp(8), dp(20), 0)
         }
 
@@ -3748,12 +3748,12 @@ class MainActivity : Activity() {
         val quantityInput = EditText(this).apply {
             hint = ui("Quantity")
             inputType = InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_FLAG_DECIMAL
-            setText(formatQuantity(transaction.quantity).replace(",", ""))
+            setText(EditableFinancialNumber.format(transaction.quantity))
         }
         val priceInput = EditText(this).apply {
             hint = ui("Transaction price per unit (Toman)")
             inputType = InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_FLAG_DECIMAL
-            setText(formatQuantity(transaction.price).replace(",", ""))
+            setText(EditableFinancialNumber.format(transaction.price))
         }
         val form = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
