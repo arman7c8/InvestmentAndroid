@@ -995,7 +995,10 @@ class MainActivity : Activity() {
     }
 
     private fun formatDate(timestamp: Long): String {
-        return SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.US).format(Date(timestamp))
+        // Presentation only; do not alter the stored UTC epoch milliseconds.
+        return SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.US).apply {
+            timeZone = java.util.TimeZone.getTimeZone("Asia/Tehran")
+        }.format(Date(timestamp))
     }
 
     private fun loadTolerance(): Double {
@@ -1076,15 +1079,8 @@ class MainActivity : Activity() {
         autoRefreshHandler.postDelayed(runnable, delay)
     }
 
-    private fun periodStartMillis(period: String): Long {
-        val duration = when (period) {
-            "Day" -> 24L * 60L * 60L * 1000L
-            "Week" -> 7L * 24L * 60L * 60L * 1000L
-            "Year" -> 365L * 24L * 60L * 60L * 1000L
-            else -> 30L * 24L * 60L * 60L * 1000L
-        }
-        return System.currentTimeMillis() - duration
-    }
+    private fun periodStartMillis(period: String): Long =
+        TehranPeriodWindow.startMillis(period, System.currentTimeMillis())
 
     private fun hashPin(pin: String): String {
         val digest = MessageDigest.getInstance("SHA-256")
