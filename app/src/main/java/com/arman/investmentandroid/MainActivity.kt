@@ -845,6 +845,12 @@ class MainActivity : Activity() {
     }
 
     private fun saveSnapshots(snapshots: List<Snapshot>) {
+        val prefs = getSharedPreferences(prefsName, MODE_PRIVATE)
+        if (prefs.contains(snapshotsKey)) {
+            SnapshotHistorySafety.requireReadableBeforeOverwrite(
+                prefs.getString(snapshotsKey, null)
+            )
+        }
         val array = JSONArray()
         snapshots.forEach { snapshot ->
             array.put(
@@ -895,6 +901,11 @@ class MainActivity : Activity() {
         val prefs = getSharedPreferences(prefsName, MODE_PRIVATE)
         val nextAssets = assetsToJsonArray(assets).toString()
         val nextTransactions = transactionsToJsonArray(transactions).toString()
+        // loadSnapshots historically returned [] on malformed JSON. Validate the
+        // durable original first or an unrelated BUY could erase price history.
+        SnapshotHistorySafety.requireReadableBeforeOverwrite(
+            prefs.getString(snapshotsKey, null)
+        )
         val snapshots = loadSnapshots()
         snapshots.add(Snapshot(total, System.currentTimeMillis()))
         val nextSnapshots = JSONArray().apply {
