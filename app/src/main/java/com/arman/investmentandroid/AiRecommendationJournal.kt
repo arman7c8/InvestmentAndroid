@@ -169,7 +169,6 @@ class AiRecommendationJournal private constructor(private val file: File) {
             }
         }
 
-        val rightOutcome = right.optJSONObject("outcome")
         if (rightOutcome != null) {
             val mergedOutcome = chosen.optJSONObject("outcome")
                 ?.let { JSONObject(it.toString()) }
