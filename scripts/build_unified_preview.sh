@@ -56,6 +56,13 @@ safety = Path("app/src/main/java/com/arman/investmentandroid/PortfolioSafety.kt"
 assert boundary.is_file(), "Missing Windows Core origin boundary"
 assert "CoreProjectionBoundary.isWindowsCoreAsset(" in safety, "Core-origin protection was disconnected"
 print("PASS: AI Advisor and Windows Core origin guards")
+backup_source = Path("app/src/main/java/com/arman/investmentandroid/MainActivity.kt").read_text()
+assert 'PortfolioSafety.validateBackup(backup)' in backup_source, "Manual export validation missing"
+assert 'PortfolioSafety.writeAndVerifyBackup(' in backup_source.split('exportBackupRequestCode -> {', 1)[1].split('importBackupRequestCode -> {', 1)[0], "Manual export must verify SAF readback"
+assert 'snapshotsWithCurrentTotal(' not in backup_source, "Restore must not append synthetic history"
+assert '.putString(snapshotsKey, sourceSnapshots.toString())' in backup_source, "Restore history is not source-preserving"
+print("PASS: manual backup validation/readback and history idempotence source guards")
+
 PY
 
 echo "Testing $SHA with isolated package: $PACKAGE"
