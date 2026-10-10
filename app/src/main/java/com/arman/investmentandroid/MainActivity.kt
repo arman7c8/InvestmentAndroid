@@ -872,6 +872,51 @@ class MainActivity : Activity() {
         saveSnapshots(snapshots)
     }
 
+    /**
+     * Commit one managed Android financial change as a single preference
+     * transaction: holdings, event history and chart snapshot move together.
+     * Windows Core and cloud files remain read-only/out of scope.
+     */
+    private fun commitManagedPortfolioChange(
+        assets: List<Asset>,
+        transactions: List<Transaction>
+    ) {
+        val ids = transactions.map { it.id }
+        require(ids.all { it.isNotBlank() } && ids.distinct().size == ids.size) {
+            "Cannot save duplicate or missing transaction identities."
+        }
+        val total = assets.sumOf { it.value }
+        require(total.isFinite() && total >= 0.0 &&
+            assets.all { it.quantity.isFinite() && it.price.isFinite() &&
+                it.averageCost.isFinite() && it.quantity >= 0.0 &&
+                it.price >= 0.0 && it.averageCost >= 0.0 }) {
+            "Invalid financial result; no transaction was saved."
+        }
+        val prefs = getSharedPreferences(prefsName, MODE_PRIVATE)
+        val nextAssets = assetsToJsonArray(assets).toString()
+        val nextTransactions = transactionsToJsonArray(transactions).toString()
+        val snapshots = loadSnapshots()
+        snapshots.add(Snapshot(total, System.currentTimeMillis()))
+        val nextSnapshots = JSONArray().apply {
+            snapshots.forEach { value ->
+                put(JSONObject().put("totalValue", value.totalValue)
+                    .put("timestamp", value.timestamp))
+            }
+        }.toString()
+        val editor = prefs.edit()
+            .putString(assetsKey, nextAssets)
+            .putString(transactionsKey, nextTransactions)
+            .putString(snapshotsKey, nextSnapshots)
+        val previousAssets = prefs.getString(assetsKey, null)
+        if (!previousAssets.isNullOrBlank() && previousAssets != nextAssets &&
+            isValidLocalAssetsJson(previousAssets)) {
+            editor.putString(lastValidAssetsKey, previousAssets)
+        }
+        check(editor.commit()) {
+            "Android could not confirm the transaction save. Check the portfolio before retrying."
+        }
+    }
+
     private fun formatToman(value: Double): String {
         val unit = loadDisplayUnit()
         val scaledValue: Double
