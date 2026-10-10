@@ -1945,15 +1945,7 @@ class MainActivity : Activity() {
     // Android transaction or target is applied by this feature.
     private fun buildUnifiedAiSnapshot(): JSONObject {
         val history = AiRecommendationJournal(this).compactHistory()
-        val knownPublicNames = setOf(
-            "BTC", "ETH", "NEAR", "SOL", "TAO", "HYPE", "LINK",
-            "USDT", "USD", "DOLLAR", "SILVER", "AYAR"
-        )
-        fun keyFor(value: String, index: Int): String {
-            val key = value.trim().uppercase(Locale.US)
-            return if (key in knownPublicNames) key else "ASSET-" + (index + 1)
-        }
-        val allocations = if (isWindowsCoreHomeSelected()) {
+         val allocations = if (isWindowsCoreHomeSelected()) {
             val current = loadVerifiedWindowsCore()
                 ?: throw IllegalStateException("Windows read-only file is missing.")
             require(current.missingPriceCount == 0 && current.pricedHoldingsToman > 0.0) {
@@ -1965,6 +1957,7 @@ class MainActivity : Activity() {
             val ordered = current.holdings.sortedWith(
                 compareBy<WindowsCoreHome.Holding> { it.name }.thenBy { it.id }
             )
+            val publicKeys = AiPublicAssetKeys.generate(ordered.map { it.name })
             ordered.mapIndexed { index, holding ->
                 val value = holding.valueToman ?: 0.0
                 require(value.isFinite() && value >= 0.0) {
@@ -1972,7 +1965,7 @@ class MainActivity : Activity() {
                 }
                 AiAdvisorContract.Allocation(
                     scope = "portfolio_asset",
-                    publicKey = keyFor(holding.name, index),
+                    publicKey = publicKeys[index],
                     currentPct = value / current.pricedHoldingsToman * 100.0,
                     targetPct = holding.effectiveTargetPercent!!
                 )
@@ -1984,14 +1977,17 @@ class MainActivity : Activity() {
             require(total.isFinite() && total > 0.0) {
                 "Portfolio target allocation value is unavailable."
             }
-            assets.sortedWith(compareBy<Asset> { it.category }.thenBy { it.name })
-                .mapIndexed { index, asset ->
+            val ordered = assets.sortedWith(
+                compareBy<Asset> { it.category }.thenBy { it.name }
+            )
+            val publicKeys = AiPublicAssetKeys.generate(ordered.map { it.symbol })
+            ordered.mapIndexed { index, asset ->
                     require(asset.value.isFinite() && asset.value >= 0.0) {
                         "Portfolio contains invalid asset values."
                     }
                     AiAdvisorContract.Allocation(
                         scope = "portfolio_asset",
-                        publicKey = keyFor(asset.symbol, index),
+                        publicKey = publicKeys[index],
                         currentPct = asset.value / total * 100.0,
                         targetPct = asset.targetPercent
                     )
