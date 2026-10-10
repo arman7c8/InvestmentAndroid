@@ -55,6 +55,20 @@ class CoreProjectionBoundaryTest {
     }
 
     @Test
+    fun AndroidNativeMetadataWithNonCoreKindRemainsEditable() {
+        val asset = windowsOrigin(JSONObject()
+            .put("kind", "manual")
+            .put("group_id", "crypto")
+            .put("asset_id", "btc"))
+        PortfolioSafety.requireEditableAndroidPortfolio(
+            JSONObject().put("assets", JSONArray().put(asset))
+        )
+        assertFalse(CoreProjectionBoundary.isWindowsCoreAsset(
+            listOf("android"), listOf("local:btc"), emptyList(), "manual", "crypto", "btc"
+        ))
+    }
+
+    @Test
     fun windowsCoreSourceSignatureIsIndependentFromAssetId() {
         assertTrue(CoreProjectionBoundary.isWindowsCoreAsset(
             listOf("android"), listOf("local:btc"), emptyList(), "asset", "crypto", "btc"
