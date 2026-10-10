@@ -782,7 +782,7 @@ class MainActivity : Activity() {
         return transactions
     }
 
-    private fun saveTransactions(transactions: List<Transaction>) {
+    private fun transactionsToJsonArray(transactions: List<Transaction>): JSONArray {
         val prefs = getSharedPreferences(prefsName, MODE_PRIVATE)
         if (prefs.contains(transactionsKey)) {
             LocalHistorySafety.requireReadableBeforeOverwrite(
@@ -816,9 +816,13 @@ class MainActivity : Activity() {
             )
         }
 
+        return array
+    }
+
+    private fun saveTransactions(transactions: List<Transaction>) {
         getSharedPreferences(prefsName, MODE_PRIVATE)
             .edit()
-            .putString(transactionsKey, array.toString())
+            .putString(transactionsKey, transactionsToJsonArray(transactions).toString())
             .apply()
     }
 
