@@ -30,7 +30,7 @@ class TehranPeriodWindowTest {
 
     @Test fun monthAndYearHaveCalendarBoundaries() {
         assertEquals(local("2026-02-01"),
-            TehranPeriodWindow.startMillis("Month", ms("2026-02-28T21:00:00Z")))
+            TehranPeriodWindow.startMillis("Month", ms("2026-02-28T20:00:00Z")))
         assertEquals(local("2026-01-01"),
             TehranPeriodWindow.startMillis("Year", ms("2026-10-10T12:00:00Z")))
     }
