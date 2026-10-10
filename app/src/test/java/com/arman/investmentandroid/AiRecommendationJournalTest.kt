@@ -65,6 +65,38 @@ class AiRecommendationJournalTest {
     }
 
     @Test
+    fun windowsAndAndroidAiHistoriesRemainSeparate() {
+        val folder = Files.createTempDirectory("investment-ai-scopes")
+        val journal = AiRecommendationJournal(folder.resolve("journal.json").toString())
+        fun snapshot(scope: String) = AiAdvisorContract.buildSnapshot(
+            allocations = listOf(
+                AiAdvisorContract.Allocation("portfolio_asset", "BTC", 60.0, 60.0),
+                AiAdvisorContract.Allocation("portfolio_asset", "GOLD-1", 40.0, 40.0)
+            ),
+            generatedAt = "2026-10-09T12:00:00Z",
+            portfolioScope = scope
+        )
+        val localId = journal.recordRecommendation(
+            snapshot("android-local"), recommendation(), "manual",
+            Instant.parse("2026-10-09T12:00:00Z")
+        ).getString("recommendation_id")
+        val windowsId = journal.recordRecommendation(
+            snapshot("windows-core-readonly"), recommendation(), "manual",
+            Instant.parse("2026-10-09T13:00:00Z")
+        ).getString("recommendation_id")
+        journal.setDecision(localId, "accepted")
+        journal.setDecision(windowsId, "accepted")
+        val time = Instant.parse("2026-10-10T12:00:00Z")
+        assertEquals(localId,
+            journal.compactHistory(now = time, portfolioScope = "android-local")
+                .single().recommendationId)
+        assertEquals(windowsId,
+            journal.compactHistory(now = time, portfolioScope = "windows-core-readonly")
+                .single().recommendationId)
+        assertEquals(2, journal.compactHistory(now = time).size)
+    }
+
+    @Test
     fun pendingRecommendationIsNotLearningHistory() {
         val folder = Files.createTempDirectory("investment-ai-journal-pending")
         val journal = AiRecommendationJournal(folder.resolve("journal.json").toString())
