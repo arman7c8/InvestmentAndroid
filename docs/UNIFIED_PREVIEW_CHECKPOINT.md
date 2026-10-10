@@ -36,11 +36,12 @@ The script requires Java 17, Gradle 8.7, SDK 35 and checks:
 4. APK package label/identity and signature;
 5. File name and SHA256 evidence in a new `dist/unified-preview-<12sha>/` directory.
 
-**Current status: source assembled; full Gradle/lint/build/device tests NOT YET RUN for this branch.** Do not mark green until the exact source commit passes, no ignored tests, and the APK SHA256 is recorded.
+**Validation checkpoint (2026-10-10):** The initial unified preview at commit `ed295aca764f` passed full Gradle unit tests, lint, APK assembly, debug signing and package verification in Codespaces. Its artifact SHA256 was `260c48268f4ad28b83527ab3b87019c8e72f5779593a38f72b801004b34d50c9`. User installed the isolated APK: Android-local home started empty (0 Toman, expected without imported data); AI Advisor entry was present. **Device screenshot exposed a real UI bug:** the AI Advisor dialog showed its privacy message and Close, but hid all five actions because Android AlertDialog.setMessage and setItems compete. The action menu was repaired in a later commit and a source invariant was added to the build script. **The repaired commit is NOT YET built or device verified**; do not reuse the old APK checksum as validation for the new source.
 
 Required device acceptance (fake accounts/assets, never real write):
 - Android local portfolio unchanged after switching Windows read-only home and back, offline restart, invalid/old source, conflict while in-flight and recoveries.
 - Windows Core values match independently replayed source including `other_assets_toman` and missing quote behavior; no duplicate cash or imported Android events.
+- AI Advisor entry must visibly show **Share privacy-safe percentages**, **Paste recommendation JSON**, **Recommendation history**, **Export AI journal**, **Restore AI journal**, **Privacy and safety information** (not just a message + Close). Check on Android 16 as well as synthetic JVM checks.
 - AI snapshot has no money, prices, quantities, bank/account IDs or raw transactions; reject stale/unknown/duplicated recommendation targets; journal backup/restore conflict leaves previous data intact.
 - Trial Windows sync with disposable SQLite only; PR #165 does not activate financial event apply.
 
