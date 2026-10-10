@@ -70,7 +70,74 @@ class AiRecommendationJournal private constructor(private val file: File) {
         return JSONObject(root.toString())
     }
 
+    private fun validateImportedRecords(records: JSONArray, label: String) {
+        require(records.length() <= MAX_RECORDS) {
+            "$label AI journal exceeds the supported record limit. Nothing was imported."
+        }
+        val identities = mutableSetOf<String>()
+        for (index in 0 until records.length()) {
+            val record = records.optJSONObject(index)
+                ?: throw JournalException("$label AI journal contains a non-object record.")
+            val id = record.optString("recommendation_id")
+            if (id.isBlank() || id.length > 80 || !identities.add(id)) {
+                throw JournalException("$label AI journal has a missing or duplicated recommendation ID.")
+            }
+            if (record.optString("status") !in setOf("pending", "accepted", "rejected")) {
+                throw JournalException("$label AI journal has an invalid recommendation status.")
+            }
+            try {
+                Instant.parse(record.getString("created_at"))
+            } catch (_: Exception) {
+                throw JournalException("$label AI journal has an invalid recommendation timestamp.")
+            }
+            // Old journal exports may have only metadata. When the complete
+            // record is present, independently enforce the strict AI contracts.
+            val hasSnapshot = record.has("snapshot") && !record.isNull("snapshot")
+            val hasRecommendation = record.has("recommendation") && !record.isNull("recommendation")
+            if (hasSnapshot != hasRecommendation) {
+                throw JournalException("$label AI journal has a partial recommendation record.")
+            }
+            if (hasSnapshot) {
+                val snapshot = record.optJSONObject("snapshot")
+                val recommendation = record.optJSONObject("recommendation")
+                if (snapshot == null || recommendation == null) {
+                    throw JournalException("$label AI journal has invalid recommendation JSON.")
+                }
+                try {
+                    AiAdvisorContract.assertSnapshotSafe(snapshot)
+                    AiAdvisorRecommendation.validate(recommendation)
+                } catch (_: Exception) {
+                    throw JournalException("$label AI journal contains an unsafe recommendation.")
+                }
+            }
+        }
+    }
+
     private fun mergeRecord(left: JSONObject, right: JSONObject): JSONObject {
+        // A recommendation ID must always refer to the same original event.
+        // Never let a cloud/manual import silently rewrite immutable advice.
+        if (left.optString("created_at") != right.optString("created_at")) {
+            throw JournalException("AI recommendation ID refers to different creation times.")
+        }
+        for (field in listOf("snapshot", "recommendation", "model")) {
+            if (!left.isNull(field) && !right.isNull(field) &&
+                left.opt(field).toString() != right.opt(field).toString()
+            ) {
+                throw JournalException("AI recommendation ID refers to conflicting $field data.")
+            }
+        }
+        val leftOutcome = left.optJSONObject("outcome")
+        val rightOutcome = right.optJSONObject("outcome")
+        if (leftOutcome != null && rightOutcome != null &&
+            leftOutcome.toString() != rightOutcome.toString()
+        ) {
+            throw JournalException("AI recommendation outcome differs between devices.")
+        }
+        val leftApplied = left.optString("applied_at")
+        val rightApplied = right.optString("applied_at")
+        if (leftApplied.isNotBlank() && rightApplied.isNotBlank() && leftApplied != rightApplied) {
+            throw JournalException("AI recommendation applied status differs between devices.")
+        }
         val rank = mapOf("pending" to 0, "rejected" to 1, "accepted" to 1)
         val chosen = JSONObject(left.toString())
         val leftStatus = left.optString("status", "pending")
@@ -132,6 +199,8 @@ class AiRecommendationJournal private constructor(private val file: File) {
 
         val localRecords = loadRoot().getJSONArray("records")
         val remoteRecords = remote.getJSONArray("records")
+        validateImportedRecords(localRecords, "Local")
+        validateImportedRecords(remoteRecords, "Imported")
         val merged = linkedMapOf<String, JSONObject>()
 
         fun absorb(records: JSONArray) {
@@ -147,7 +216,10 @@ class AiRecommendationJournal private constructor(private val file: File) {
         absorb(remoteRecords)
         absorb(localRecords)
 
-        val values = merged.values.toList().takeLast(MAX_RECORDS)
+        if (merged.size > MAX_RECORDS) {
+            throw JournalException("AI journal merge exceeds the record limit; previous data was kept.")
+        }
+        val values = merged.values.toList()
         val result = JSONObject()
             .put("format", FORMAT)
             .put("schema_version", SCHEMA_VERSION)
