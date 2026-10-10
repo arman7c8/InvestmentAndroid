@@ -162,11 +162,20 @@ object PortfolioSafety {
             // authoritative. JSONObject.optString(default) only falls back when
             // the key is absent, not when a benign id masks a Windows sharedId.
             val origins = listOf("source_platform", "sourcePlatform")
-                .map { asset.optString(it, "").trim().lowercase(Locale.US) }
+                .map { asset.optString(it, "") }
             val identities = listOf("id", "sharedId")
-                .map { asset.optString(it, "").trim().lowercase(Locale.US) }
-            require(origins.none { it == "windows-core" } &&
-                identities.none { it.startsWith("windows:") }) {
+                .map { asset.optString(it, "") }
+            val source = asset.optJSONObject("source")
+            val nestedOrigins = listOf("platform", "source_platform", "sourcePlatform")
+                .map { source?.optString(it, "") ?: "" }
+            require(!CoreProjectionBoundary.isWindowsCoreAsset(
+                origins = origins,
+                identities = identities,
+                nestedOrigins = nestedOrigins,
+                sourceKind = source?.optString("kind", "") ?: "",
+                sourceGroupId = source?.optString("group_id", "") ?: "",
+                sourceAssetId = source?.optString("asset_id", "") ?: ""
+            )) {
                 "This file contains a Windows Core projection, not an editable Android ledger. " +
                     "Use View Windows Core Snapshot (Read-only). Nothing was changed."
             }
