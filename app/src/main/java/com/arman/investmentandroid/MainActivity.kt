@@ -628,6 +628,19 @@ class MainActivity : Activity() {
 
     private fun saveAssets(assets: List<Asset>) {
         val prefs = getSharedPreferences(prefsName, MODE_PRIVATE)
+        // A broken local asset/transaction file must never be replaced by the
+        // empty fallback returned from the old read path. Keep bytes for recovery.
+        if (prefs.contains(assetsKey)) {
+            val original = prefs.getString(assetsKey, null)
+            require(!original.isNullOrBlank() && isValidLocalAssetsJson(original)) {
+                "Stored assets are damaged. No portfolio data was overwritten."
+            }
+        }
+        if (prefs.contains(transactionsKey)) {
+            LocalHistorySafety.requireReadableBeforeOverwrite(
+                prefs.getString(transactionsKey, null)
+            )
+        }
         val next = assetsToJsonArray(assets).toString()
         val editor = prefs.edit().putString(assetsKey, next)
         val current = prefs.getString(assetsKey, null)
@@ -770,6 +783,12 @@ class MainActivity : Activity() {
     }
 
     private fun saveTransactions(transactions: List<Transaction>) {
+        val prefs = getSharedPreferences(prefsName, MODE_PRIVATE)
+        if (prefs.contains(transactionsKey)) {
+            LocalHistorySafety.requireReadableBeforeOverwrite(
+                prefs.getString(transactionsKey, null)
+            )
+        }
         val array = JSONArray()
 
         transactions.forEach { transaction ->
@@ -5663,6 +5682,10 @@ class MainActivity : Activity() {
 
     private fun buildAndroidBackupPayload(): JSONObject {
         val prefs = getSharedPreferences(prefsName, MODE_PRIVATE)
+        // Do not certify a backup with silently truncated or duplicated history.
+        LocalHistorySafety.requireReadableBeforeOverwrite(
+            prefs.getString(transactionsKey, "[]")
+        )
 
         return JSONObject().apply {
             put("backupVersion", 3)
