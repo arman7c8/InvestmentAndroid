@@ -4960,7 +4960,7 @@ class MainActivity : Activity() {
 
         val top = panel()
         top.addView(body(ui(if (data.completeValueToman == null)
-            "Priced holdings + cash (incomplete)" else "Estimated portfolio value")))
+            "Net worth (incomplete: missing quotes)" else "Estimated net worth (includes fixed assets)")))
         top.addView(body(amount(data.partialValueToman), true))
         if (data.missingPriceCount > 0) {
             top.addView(body(
