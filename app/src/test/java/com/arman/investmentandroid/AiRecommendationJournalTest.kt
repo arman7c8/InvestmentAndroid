@@ -44,6 +44,27 @@ class AiRecommendationJournalTest {
         assertEquals(8, compact.last().ageDays)
     }
     @Test
+    fun acceptedDecisionIsIdempotentAndCannotReverse() {
+        val folder = Files.createTempDirectory("investment-ai-decision-guard")
+        val journal = AiRecommendationJournal(folder.resolve("journal.json").toString())
+        val snapshot = AiAdvisorContract.buildSnapshot(
+            allocations = listOf(
+                AiAdvisorContract.Allocation("portfolio_asset", "BTC", 60.0, 60.0),
+                AiAdvisorContract.Allocation("portfolio_asset", "GOLD-1", 40.0, 40.0)
+            ),
+            generatedAt = "2026-10-09T12:00:00Z"
+        )
+        val record = journal.recordRecommendation(snapshot, recommendation(), "manual")
+        val id = record.getString("recommendation_id")
+        journal.setDecision(id, "accepted")
+        journal.setDecision(id, "accepted")
+        org.junit.Assert.assertThrows(AiRecommendationJournal.JournalException::class.java) {
+            journal.setDecision(id, "rejected")
+        }
+        assertEquals("accepted", journal.listRecords().single().getString("status"))
+    }
+
+    @Test
     fun pendingRecommendationIsNotLearningHistory() {
         val folder = Files.createTempDirectory("investment-ai-journal-pending")
         val journal = AiRecommendationJournal(folder.resolve("journal.json").toString())
