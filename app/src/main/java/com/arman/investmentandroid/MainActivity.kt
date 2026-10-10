@@ -1940,6 +1940,77 @@ class MainActivity : Activity() {
         }
     }
 
+    // AI Advisor stays offline/manual until a supported ChatGPT OAuth
+    // integration is explicitly verified. No Windows financial proposal,
+    // Android transaction or target is applied by this feature.
+    private fun buildUnifiedAiSnapshot(): JSONObject {
+        val history = AiRecommendationJournal(this).compactHistory()
+        val knownPublicNames = setOf(
+            "BTC", "ETH", "NEAR", "SOL", "TAO", "HYPE", "LINK",
+            "USDT", "USD", "DOLLAR", "SILVER", "AYAR"
+        )
+        fun keyFor(value: String, index: Int): String {
+            val key = value.trim().uppercase(Locale.US)
+            return if (key in knownPublicNames) key else "ASSET-" + (index + 1)
+        }
+        val allocations = if (isWindowsCoreHomeSelected()) {
+            val current = loadVerifiedWindowsCore()
+                ?: throw IllegalStateException("Windows read-only file is missing.")
+            require(current.missingPriceCount == 0 && current.pricedHoldingsToman > 0.0) {
+                "Windows prices are incomplete. AI review is not available."
+            }
+            require(current.holdings.all { it.effectiveTargetPercent != null }) {
+                "Windows portfolio target policy is missing."
+            }
+            val ordered = current.holdings.sortedWith(
+                compareBy<WindowsCoreHome.Holding> { it.name }.thenBy { it.id }
+            )
+            ordered.mapIndexed { index, holding ->
+                val value = holding.valueToman ?: 0.0
+                require(value.isFinite() && value >= 0.0) {
+                    "Windows portfolio contains invalid holding values."
+                }
+                AiAdvisorContract.Allocation(
+                    scope = "portfolio_asset",
+                    publicKey = keyFor(holding.name, index),
+                    currentPct = value / current.pricedHoldingsToman * 100.0,
+                    targetPct = holding.effectiveTargetPercent!!
+                )
+            }
+        } else {
+            val assets = loadAssets().filter { it.includeInTarget }
+            require(assets.isNotEmpty()) { "No target-allocation assets are available." }
+            val total = assets.sumOf { it.value }
+            require(total.isFinite() && total > 0.0) {
+                "Portfolio target allocation value is unavailable."
+            }
+            assets.sortedWith(compareBy<Asset> { it.category }.thenBy { it.name })
+                .mapIndexed { index, asset ->
+                    require(asset.value.isFinite() && asset.value >= 0.0) {
+                        "Portfolio contains invalid asset values."
+                    }
+                    AiAdvisorContract.Allocation(
+                        scope = "portfolio_asset",
+                        publicKey = keyFor(asset.symbol, index),
+                        currentPct = asset.value / total * 100.0,
+                        targetPct = asset.targetPercent
+                    )
+                }
+        }
+        require(kotlin.math.abs(allocations.sumOf { it.targetPct } - 100.0) < 0.25) {
+            "Target percentages must total 100% for an AI review."
+        }
+        return AiAdvisorContract.buildSnapshot(
+            allocations = allocations,
+            recommendationHistory = history,
+            generatedAt = java.time.Instant.now().toString()
+        )
+    }
+
+    private fun showUnifiedAiAdvisor() {
+        AiManualAdvisorUi(this, ::buildUnifiedAiSnapshot).show()
+    }
+
     private fun showToolsDialog() {
         val options = arrayOf(
             "AI Portfolio Summary",
@@ -1951,7 +2022,8 @@ class MainActivity : Activity() {
             "App Lock",
             "Settings",
             "Backup / Restore",
-            "Reset Portfolio"
+            "Reset Portfolio",
+            "AI Advisor (offline preview)"
         )
 
         AlertDialog.Builder(this)
@@ -1968,6 +2040,7 @@ class MainActivity : Activity() {
                     7 -> showSettingsDialog()
                     8 -> showBackupDialog()
                     9 -> showResetDemoDialog()
+                    10 -> showUnifiedAiAdvisor()
                 }
             }
             .setNegativeButton(ui("Close"), null)
@@ -4908,6 +4981,13 @@ class MainActivity : Activity() {
         }
         container.addView(top)
 
+        if (data.nonTargetAssetsToman > 0.0) {
+            top.addView(body(
+                ui("Non-target fixed assets (net worth only)") + ": " +
+                    amount(data.nonTargetAssetsToman)
+            ))
+        }
+
         container.addView(body(ui("Windows holdings"), true))
         val holdings = panel()
         data.holdings.sortedWith(
@@ -4941,6 +5021,11 @@ class MainActivity : Activity() {
         }
         container.addView(cash)
 
+        container.addView(Button(this).apply {
+            text = ui("AI Advisor — percentages only (offline)")
+            isAllCaps = false
+            setOnClickListener { showUnifiedAiAdvisor() }
+        })
         container.addView(Button(this).apply {
             text = ui("Load newer Windows snapshot")
             isAllCaps = false
