@@ -62,6 +62,19 @@ assert 'PortfolioSafety.writeAndVerifyBackup(' in backup_source.split('exportBac
 assert 'snapshotsWithCurrentTotal(' not in backup_source, "Restore must not append synthetic history"
 assert '.putString(snapshotsKey, sourceSnapshots.toString())' in backup_source, "Restore history is not source-preserving"
 print("PASS: manual backup validation/readback and history idempotence source guards")
+# These v0.13 bridge features are strictly read-only or Android-local.
+corehome = Path("app/src/main/java/com/arman/investmentandroid/WindowsCoreHome.kt").read_text()
+assert "WindowsReserveStatus.fromVerifiedCash(" in corehome
+assert "verified.policy?.tolerance" in corehome
+assert 'reserveStatus: WindowsReserveStatus.Result? = null' in corehome
+assert "LocalHistorySafety.requireReadableBeforeOverwrite(" in backup_source
+assert "SnapshotHistorySafety.requireReadableBeforeOverwrite(" in backup_source
+assert "commitManagedPortfolioChange(assets, transactions)" in backup_source
+assert "TehranPeriodWindow.startMillis(period, System.currentTimeMillis())" in backup_source
+assert "Asia/Tehran" in backup_source
+assert Path("app/src/test/java/com/arman/investmentandroid/TehranPeriodWindowTest.kt").is_file()
+assert Path("app/src/test/java/com/arman/investmentandroid/WindowsReserveStatusTest.kt").is_file()
+print("PASS: v0.13 read-only policy, Tehran boundaries and local-history safety guards")
 
 PY
 
