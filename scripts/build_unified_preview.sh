@@ -83,7 +83,9 @@ assert "LocalHistorySafety.requireReadableBeforeOverwrite(" in backup_source
 assert "SnapshotHistorySafety.requireReadableBeforeOverwrite(" in backup_source
 assert "commitManagedPortfolioChange(assets, transactions)" in backup_source
 assert "TehranPeriodWindow.startMillis(period, System.currentTimeMillis())" in backup_source
-assert "Asia/Tehran" in backup_source
+tehran_time = Path("app/src/main/java/com/arman/investmentandroid/TehranDisplayTime.kt").read_text()
+assert "TehranDisplayTime.gregorian(timestamp)" in backup_source
+assert 'TimeZone.getTimeZone("Asia/Tehran")' in tehran_time
 assert Path("app/src/test/java/com/arman/investmentandroid/TehranPeriodWindowTest.kt").is_file()
 assert Path("app/src/test/java/com/arman/investmentandroid/WindowsReserveStatusTest.kt").is_file()
 print("PASS: v0.13 read-only policy, Tehran boundaries and local-history safety guards")
