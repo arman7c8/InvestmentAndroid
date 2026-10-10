@@ -5170,6 +5170,34 @@ class MainActivity : Activity() {
             ))
         }
 
+        // Read-only v0.13 policy. Never count reserve goals as assets or send
+        // them to the editable Android local ledger.
+        data.reserveStatus?.let { reserve ->
+            val reservePanel = panel()
+            reservePanel.addView(body(ui("Cash Reserve (Windows read-only)"), true))
+            reservePanel.addView(body(
+                ui("Cash reserve target (Toman)") + ": " + amount(reserve.targetToman)
+            ))
+            reservePanel.addView(body(
+                ui("Windows cash available") + ": " + amount(reserve.actualToman)
+            ))
+            val descriptor = when (reserve.kind) {
+                WindowsReserveStatus.Kind.SURPLUS -> ui("Cash reserve surplus")
+                WindowsReserveStatus.Kind.SHORTFALL -> ui("Cash reserve shortfall")
+                WindowsReserveStatus.Kind.EXACT -> ui("Cash reserve on target")
+            }
+            reservePanel.addView(body(
+                descriptor + ": " + amount(kotlin.math.abs(reserve.differenceToman))
+            ))
+            data.policyTolerancePercent?.let { tolerance ->
+                reservePanel.addView(body(
+                    ui("Global tolerance (%)") + ": " +
+                        CoreSnapshotPreview.formatQuantityForDisplay(tolerance) + "%"
+                ))
+            }
+            container.addView(reservePanel)
+        }
+
         container.addView(body(ui("Windows holdings"), true))
         val holdings = panel()
         data.holdings.sortedWith(
