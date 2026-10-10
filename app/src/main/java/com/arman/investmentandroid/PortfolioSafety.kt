@@ -306,6 +306,20 @@ object PortfolioSafety {
     private fun validateAndroidSupplementalPayload(root: JSONObject) {
         optionalObjectArray(root, "transactions", MAX_HISTORY_ROWS)
         optionalObjectArray(root, "snapshots", MAX_HISTORY_ROWS)
+        // Exact replay identities must not occur twice inside one imported document.
+        // Reject rather than silently dropping or applying duplicate ledger entries.
+        val transactionIds = mutableSetOf<String>()
+        root.optJSONArray("transactions")?.let { rows ->
+            for (index in 0 until rows.length()) {
+                val transaction = rows.getJSONObject(index)
+                val id = transaction.optString("id", "").trim()
+                if (id.isNotEmpty()) {
+                    require(transactionIds.add(id)) {
+                        "Backup contains duplicate transaction ID. Nothing was changed."
+                    }
+                }
+            }
+        }
 
         if (root.has("categories")) {
             val categories = requiredArray(root, "categories")
