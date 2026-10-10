@@ -3,7 +3,6 @@ package com.arman.investmentandroid
 import android.app.Activity
 import android.app.AlertDialog
 import android.content.Intent
-import android.graphics.Color
 import android.text.InputType
 import android.view.ViewGroup
 import android.widget.EditText
@@ -246,7 +245,6 @@ class AiManualAdvisorUi(
             addView(TextView(activity).apply {
                 this.text = text
                 textSize = 14f
-                setTextColor(Color.DKGRAY)
                 val pad = (18 * resources.displayMetrics.density).toInt()
                 setPadding(pad, pad, pad, pad)
             }, ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,
