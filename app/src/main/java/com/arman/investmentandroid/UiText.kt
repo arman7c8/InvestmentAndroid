@@ -20,6 +20,15 @@ object UiText {
         "AI Advisor (offline preview)" to "مشاور هوشمند (آزمایشی آفلاین)",
         "AI Advisor — percentages only (offline)" to "مشاور هوشمند؛ فقط درصدها (آفلاین)",
         "Non-target fixed assets (net worth only)" to "دارایی‌های ثابت خارج از تخصیص (فقط ارزش خالص)",
+        "Cash Reserve (Windows read-only)" to "ذخیره نقدی ویندوز (فقط‌خواندنی)",
+        "Windows cash available" to "موجودی نقدی ویندوز",
+        "Cash reserve surplus" to "مازاد ذخیره نقدی",
+        "Cash reserve shortfall" to "کسری ذخیره نقدی",
+        "Cash reserve on target" to "ذخیره نقدی مطابق هدف",
+        "Local data protection" to "محافظت از اطلاعات محلی",
+        "Stored Android data was not changed. Editing and sync are disabled until this data is safely recovered." to
+            "اطلاعات اندروید تغییر نکرده‌اند. تا بازیابی ایمن، ویرایش و همگام‌سازی غیرفعال هستند.",
+        "Check local data again" to "بررسی دوباره اطلاعات محلی",
         "Windows Portfolio" to "سبد ویندوز",
         "Read-only" to "فقط‌خواندنی",
         "Imported to phone: " to "زمان بارگذاری در گوشی: ",
@@ -338,6 +347,19 @@ object UiText {
         "Remove App Lock" to "برداشتن قفل برنامه",
         "Rename" to "تغییر نام",
         "Backup Error" to "خطای پشتیبان‌گیری",
+        "Confirm backup restore" to "تأیید بازیابی نسخه پشتیبان",
+        "Restore backup" to "بازیابی نسخه پشتیبان",
+        "The selected backup contains " to "فایل انتخاب‌شده شامل ",
+        " assets. Restoring replaces the phone portfolio and its history. " to
+            " دارایی است. بازیابی، سبد گوشی و تاریخچه آن را جایگزین می‌کند. ",
+        "The current local data is preserved for recovery. Continue?" to
+            "نسخه قبلی اطلاعات گوشی برای بازیابی محفوظ می‌ماند. ادامه می‌دهید؟",
+        "Edit BUY transaction" to "اصلاح تراکنش خرید",
+        "Save correction" to "ذخیره اصلاح خرید",
+        "Correction unavailable" to "اصلاح تراکنش مجاز نیست",
+        "A later change prevents safe correction. Nothing was changed." to
+            "به‌دلیل تغییر بعدی دارایی، اصلاح ایمن ممکن نیست؛ اطلاعات تغییری نکرد.",
+
         "Cloud Status" to "وضعیت ابر",
         "Cloud Sync Conflict" to "تداخل همگام‌سازی ابری",
         "Connect Google Drive" to "اتصال به گوگل درایو",

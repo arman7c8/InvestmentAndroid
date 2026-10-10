@@ -5,11 +5,12 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
-EXPECTED_BRANCH="feature/v032-unified-preview"
 BRANCH="$(git branch --show-current)"
-[[ "$BRANCH" == "$EXPECTED_BRANCH" ]] || {
-  echo "Stop: checkout $EXPECTED_BRANCH in a separate development workspace." >&2; exit 1;
-}
+# Only explicitly permitted disposable development branches may produce this APK.
+case "$BRANCH" in
+  feature/v032-unified-preview|feature/android-windows-v013-compat-guards-20261010) ;;
+  *) echo "Stop: use an approved isolated Android development branch." >&2; exit 1 ;;
+esac
 [[ -z "$(git status --porcelain --untracked-files=no)" ]] || {
   echo "Stop: tracked files have uncommitted changes." >&2; exit 1;
 }
@@ -50,7 +51,45 @@ assert ".setItems(" in menu, "AI Advisor action list has been removed"
 assert ".setMessage(" not in menu, "AlertDialog message hides AI Advisor actions on Android"
 history = source.split("    private fun history() {", 1)[1]
 assert "setTextColor(Color.DKGRAY)" not in history, "AI journal history has an unreadable hardcoded dark text color"
-print("PASS: AI Advisor action list and journal history theme color guards")
+boundary = Path("app/src/main/java/com/arman/investmentandroid/CoreProjectionBoundary.kt")
+safety = Path("app/src/main/java/com/arman/investmentandroid/PortfolioSafety.kt").read_text()
+assert boundary.is_file(), "Missing Windows Core origin boundary"
+assert "CoreProjectionBoundary.isWindowsCoreAsset(" in safety, "Core-origin protection was disconnected"
+print("PASS: AI Advisor and Windows Core origin guards")
+backup_source = Path("app/src/main/java/com/arman/investmentandroid/MainActivity.kt").read_text()
+assert 'PortfolioSafety.validateBackup(backup)' in backup_source, "Manual export validation missing"
+assert 'PortfolioSafety.writeAndVerifyBackup(' in backup_source.split('exportBackupRequestCode -> {', 1)[1].split('importBackupRequestCode -> {', 1)[0], "Manual export must verify SAF readback"
+assert 'snapshotsWithCurrentTotal(' not in backup_source, "Restore must not append synthetic history"
+assert '.putString(snapshotsKey, sourceSnapshots.toString())' in backup_source, "Restore history is not source-preserving"
+print("PASS: manual backup validation/readback and history idempotence source guards")
+assert 'PortfolioSafety.requireUnchangedLocalRestoreState(' in backup_source, "Import must protect transaction-only local changes"
+assert 'PortfolioSafety.requireCompleteManualRestoreHistory(' in backup_source, "Manual restore is allowed to mix unrelated history"
+import_part = backup_source.split('importBackupRequestCode -> {', 1)[1].split('createCloudBackupRequestCode -> {', 1)[0]
+assert '.setTitle(ui("Confirm backup restore"))' in import_part, "Nonempty local restores need explicit confirmation"
+assert 'commitManagedPortfolioChange(assets, transactions)' in backup_source, "Managed trade/ledger atomic commit missing"
+assert 'commitManagedPortfolioChange(currentAssets, currentTransactions)' in backup_source, "BUY correction bypasses atomic commit"
+assert 'EditableFinancialNumber.format(it.averageCost)' in backup_source, "Average-cost edit would truncate existing decimals"
+assert 'EditableFinancialNumber.format(it.quantity)' in backup_source, "Quantity edit would truncate crypto decimals"
+assert 'text = ui("Edit Asset")' in backup_source, "Asset editor action is not visible"
+assert 'TehranDisplayTime.gregorian(timestamp)' in backup_source, "Activity dates must be Tehran-local"
+print("PASS: local restore conflict, atomic trade, precision and Tehran presentation guards")
+
+# These v0.13 bridge features are strictly read-only or Android-local.
+corehome = Path("app/src/main/java/com/arman/investmentandroid/WindowsCoreHome.kt").read_text()
+assert "WindowsReserveStatus.fromVerifiedCash(" in corehome
+assert "verified.policy?.tolerance" in corehome
+assert 'reserveStatus: WindowsReserveStatus.Result? = null' in corehome
+assert "LocalHistorySafety.requireReadableBeforeOverwrite(" in backup_source
+assert "SnapshotHistorySafety.requireReadableBeforeOverwrite(" in backup_source
+assert "commitManagedPortfolioChange(assets, transactions)" in backup_source
+assert "TehranPeriodWindow.startMillis(period, System.currentTimeMillis())" in backup_source
+tehran_time = Path("app/src/main/java/com/arman/investmentandroid/TehranDisplayTime.kt").read_text()
+assert "TehranDisplayTime.gregorian(timestamp)" in backup_source
+assert 'TimeZone.getTimeZone("Asia/Tehran")' in tehran_time
+assert Path("app/src/test/java/com/arman/investmentandroid/TehranPeriodWindowTest.kt").is_file()
+assert Path("app/src/test/java/com/arman/investmentandroid/WindowsReserveStatusTest.kt").is_file()
+print("PASS: v0.13 read-only policy, Tehran boundaries and local-history safety guards")
+
 PY
 
 echo "Testing $SHA with isolated package: $PACKAGE"

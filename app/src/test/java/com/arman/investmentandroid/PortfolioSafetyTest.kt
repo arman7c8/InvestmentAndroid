@@ -89,6 +89,80 @@ class PortfolioSafetyTest {
     }
 
     @Test
+    fun repeatedImportKeepsExactlyOneTransactionIdentity() {
+        val item = JSONObject().put("id", "synthetic-buy-01")
+            .put("type", "BUY").put("quantity", 2.0).put("price", 15000.0)
+        val doc = sharedDocument().put("androidBackup",
+            JSONObject().put("backupVersion", 3)
+                .put("transactions", JSONArray().put(item))
+                .put("snapshots", JSONArray()))
+        val first = PortfolioSafety.validateBackup(doc.toString())
+        val second = PortfolioSafety.validateBackup(doc.toString())
+        assertEquals(1, first.androidPayload!!.getJSONArray("transactions").length())
+        assertEquals(first.androidPayload!!.getJSONArray("transactions").toString(),
+            second.androidPayload!!.getJSONArray("transactions").toString())
+    }
+
+    @Test
+    fun duplicateTransactionsInsideBackupAreRejectedBeforeRestore() {
+        val a = JSONObject().put("id", "same-id").put("type", "BUY")
+        val b = JSONObject().put("id", "same-id").put("type", "BUY")
+        val doc = sharedDocument().put("androidBackup",
+            JSONObject().put("backupVersion", 3)
+                .put("transactions", JSONArray().put(a).put(b)))
+        assertThrows(IllegalArgumentException::class.java) {
+            PortfolioSafety.validateBackup(doc.toString())
+        }
+    }
+
+    @Test
+    fun manualRestoreRejectsTransactionOnlyLocalChanges() {
+        val before = "{\"assets\":[],\"transactions\":[{\"id\":\"tx-a\"}],\"snapshots\":[]}"
+        val after = "{\"assets\":[],\"transactions\":[{\"id\":\"tx-b\"}],\"snapshots\":[]}"
+        PortfolioSafety.requireUnchangedLocalRestoreState(before, before)
+        assertThrows(IllegalStateException::class.java) {
+            PortfolioSafety.requireUnchangedLocalRestoreState(before, after)
+        }
+    }
+
+    @Test
+    fun manualRestoreRejectsHistorylessSharedFileOverExistingTransactions() {
+        val incoming = PortfolioSafety.validateBackup(sharedDocument().toString())
+        PortfolioSafety.requireCompleteManualRestoreHistory(incoming, false, false)
+        assertThrows(IllegalArgumentException::class.java) {
+            PortfolioSafety.requireCompleteManualRestoreHistory(incoming, true, false)
+        }
+        assertThrows(IllegalArgumentException::class.java) {
+            PortfolioSafety.requireCompleteManualRestoreHistory(incoming, false, true)
+        }
+    }
+
+    @Test
+    fun manualRestoreAcceptsFullAndroidHistoryPayload() {
+        val document = sharedDocument().put("androidBackup", JSONObject()
+            .put("backupVersion", 3)
+            .put("transactions", JSONArray().put(JSONObject()
+                .put("id", "synthetic-buy-01").put("type", "BUY")))
+            .put("snapshots", JSONArray().put(JSONObject()
+                .put("totalValue", 60000).put("timestamp", 12345))))
+        val validated = PortfolioSafety.validateBackup(document.toString())
+        PortfolioSafety.requireCompleteManualRestoreHistory(validated, true, true)
+        assertEquals(1, validated.androidPayload!!.getJSONArray("transactions").length())
+    }
+
+    @Test
+    fun legacyBackupRequiresExplicitHistoryWhenPhoneAlreadyHasHistory() {
+        val legacy = JSONObject().put("backupVersion", 3)
+            .put("assets", JSONArray().put(JSONObject()
+                .put("name", "TEST").put("category", "Other")
+                .put("quantity", 1).put("price", 100)))
+        val validated = PortfolioSafety.validateBackup(legacy.toString())
+        assertThrows(IllegalArgumentException::class.java) {
+            PortfolioSafety.requireCompleteManualRestoreHistory(validated, true, false)
+        }
+    }
+
+    @Test
     fun malformedJsonIsRejected() {
         assertThrows(IllegalArgumentException::class.java) {
             PortfolioSafety.validateBackup("{not-json")

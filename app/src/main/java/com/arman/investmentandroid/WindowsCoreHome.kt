@@ -27,7 +27,9 @@ object WindowsCoreHome {
         val pricedHoldingsToman: Double,
         val cashToman: Double,
         val missingPriceCount: Int,
-        val nonTargetAssetsToman: Double = 0.0
+        val nonTargetAssetsToman: Double = 0.0,
+        val reserveStatus: WindowsReserveStatus.Result? = null,
+        val policyTolerancePercent: Double? = null
     ) {
         // A missing nonzero holding quote must not silently become zero net worth.
         val completeValueToman: Double?
@@ -128,7 +130,11 @@ object WindowsCoreHome {
             pricedHoldingsToman = sum(items.mapNotNull { it.valueToman }),
             cashToman = sum(accounts.map { it.balanceToman }),
             missingPriceCount = missing,
-            nonTargetAssetsToman = nonTargetAssetsToman
+            nonTargetAssetsToman = nonTargetAssetsToman,
+            reserveStatus = verified.policy?.let {
+                WindowsReserveStatus.fromVerifiedCash(sum(accounts.map { a -> a.balanceToman }), it.reserve)
+            },
+            policyTolerancePercent = verified.policy?.tolerance
         )
         require(result.partialValueToman.isFinite()) {
             "Windows Core total net worth is outside the supported range."

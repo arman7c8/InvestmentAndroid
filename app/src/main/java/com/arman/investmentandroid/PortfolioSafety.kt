@@ -162,11 +162,20 @@ object PortfolioSafety {
             // authoritative. JSONObject.optString(default) only falls back when
             // the key is absent, not when a benign id masks a Windows sharedId.
             val origins = listOf("source_platform", "sourcePlatform")
-                .map { asset.optString(it, "").trim().lowercase(Locale.US) }
+                .map { asset.optString(it, "") }
             val identities = listOf("id", "sharedId")
-                .map { asset.optString(it, "").trim().lowercase(Locale.US) }
-            require(origins.none { it == "windows-core" } &&
-                identities.none { it.startsWith("windows:") }) {
+                .map { asset.optString(it, "") }
+            val source = asset.optJSONObject("source")
+            val nestedOrigins = listOf("platform", "source_platform", "sourcePlatform")
+                .map { source?.optString(it, "") ?: "" }
+            require(!CoreProjectionBoundary.isWindowsCoreAsset(
+                origins = origins,
+                identities = identities,
+                nestedOrigins = nestedOrigins,
+                sourceKind = source?.optString("kind", "") ?: "",
+                sourceGroupId = source?.optString("group_id", "") ?: "",
+                sourceAssetId = source?.optString("asset_id", "") ?: ""
+            )) {
                 "This file contains a Windows Core projection, not an editable Android ledger. " +
                     "Use View Windows Core Snapshot (Read-only). Nothing was changed."
             }
@@ -176,6 +185,42 @@ object PortfolioSafety {
     fun ensureSafeReplacement(localAssetCount: Int, incomingAssetCount: Int) {
         require(localAssetCount <= 0 || incomingAssetCount > 0) {
             "Backup contains no assets, so it was not allowed to replace the current portfolio."
+        }
+    }
+
+    /**
+     * Holdings alone are insufficient to decide whether a delayed SAF read may
+     * overwrite the local portfolio. Transactions and snapshots also count.
+     */
+    fun requireUnchangedLocalRestoreState(expected: String, current: String) {
+        check(expected == current) {
+            "Phone assets, transactions, or history changed during restore. Nothing was overwritten."
+        }
+    }
+
+    /**
+     * A manual restore must never quietly inherit the phone's old transaction
+     * history when the selected backup replaces its holdings. Older holdings-
+     * only formats are still accepted into an *empty* disposable portfolio.
+     */
+    fun requireCompleteManualRestoreHistory(
+        incoming: ValidatedBackup,
+        localTransactionsExist: Boolean,
+        localSnapshotsExist: Boolean
+    ) {
+        val payload = when (incoming.kind) {
+            BackupKind.SHARED -> incoming.androidPayload
+            BackupKind.LEGACY_ANDROID -> incoming.root
+        }
+        if (localTransactionsExist) {
+            require(payload?.optJSONArray("transactions") != null) {
+                "Backup has no transaction history. Existing phone history was preserved; restore cancelled."
+            }
+        }
+        if (localSnapshotsExist) {
+            require(payload?.optJSONArray("snapshots") != null) {
+                "Backup has no portfolio snapshots. Existing phone history was preserved; restore cancelled."
+            }
         }
     }
 
@@ -297,6 +342,20 @@ object PortfolioSafety {
     private fun validateAndroidSupplementalPayload(root: JSONObject) {
         optionalObjectArray(root, "transactions", MAX_HISTORY_ROWS)
         optionalObjectArray(root, "snapshots", MAX_HISTORY_ROWS)
+        // Exact replay identities must not occur twice inside one imported document.
+        // Reject rather than silently dropping or applying duplicate ledger entries.
+        val transactionIds = mutableSetOf<String>()
+        root.optJSONArray("transactions")?.let { rows ->
+            for (index in 0 until rows.length()) {
+                val transaction = rows.getJSONObject(index)
+                val id = transaction.optString("id", "").trim()
+                if (id.isNotEmpty()) {
+                    require(transactionIds.add(id)) {
+                        "Backup contains duplicate transaction ID. Nothing was changed."
+                    }
+                }
+            }
+        }
 
         if (root.has("categories")) {
             val categories = requiredArray(root, "categories")

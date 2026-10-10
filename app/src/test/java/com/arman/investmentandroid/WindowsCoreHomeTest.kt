@@ -110,6 +110,13 @@ class WindowsCoreHomeTest {
         assertEquals(0, overview.transactionCount)
     }
 
+    @Test fun v1ReadOnlySnapshotDoesNotInventV13ReservePolicy() {
+        val overview = WindowsCoreHome.inspect(exportedSnapshot())
+        assertNull(overview.reserveStatus)
+        assertNull(overview.policyTolerancePercent)
+        assertEquals(1_500_000.0, overview.cashToman, 0.0)
+    }
+
     @Test fun fixedAssetsAreIncludedInWindowsNetWorthButNotHoldings() {
         val overview = WindowsCoreHome.inspect(exportedSnapshot(otherAssetsToman = 200_000_000.0))
         assertEquals(200_000_000.0, overview.nonTargetAssetsToman, 0.0)

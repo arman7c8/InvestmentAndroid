@@ -628,6 +628,19 @@ class MainActivity : Activity() {
 
     private fun saveAssets(assets: List<Asset>) {
         val prefs = getSharedPreferences(prefsName, MODE_PRIVATE)
+        // A broken local asset/transaction file must never be replaced by the
+        // empty fallback returned from the old read path. Keep bytes for recovery.
+        if (prefs.contains(assetsKey)) {
+            val original = prefs.getString(assetsKey, null)
+            require(!original.isNullOrBlank() && isValidLocalAssetsJson(original)) {
+                "Stored assets are damaged. No portfolio data was overwritten."
+            }
+        }
+        if (prefs.contains(transactionsKey)) {
+            LocalHistorySafety.requireReadableBeforeOverwrite(
+                prefs.getString(transactionsKey, null)
+            )
+        }
         val next = assetsToJsonArray(assets).toString()
         val editor = prefs.edit().putString(assetsKey, next)
         val current = prefs.getString(assetsKey, null)
@@ -700,7 +713,16 @@ class MainActivity : Activity() {
             close(left.targetPercent, right.targetPercent) &&
             left.includeInTarget == right.includeInTarget &&
             left.priceSource == right.priceSource &&
-            left.symbol == right.symbol
+            left.symbol == right.symbol &&
+            // Provenance is part of identity for reversible financial events.
+            // Never match two same-named assets from different origins.
+            left.sharedId == right.sharedId &&
+            left.sourcePlatform == right.sourcePlatform &&
+            left.sourceKind == right.sourceKind &&
+            left.sourceGroupId == right.sourceGroupId &&
+            left.sourceAssetId == right.sourceAssetId &&
+            left.sourceBankId == right.sourceBankId &&
+            left.sourceGroupKind == right.sourceGroupKind
     }
 
     private fun loadTransactions(): MutableList<Transaction> {
@@ -760,7 +782,13 @@ class MainActivity : Activity() {
         return transactions
     }
 
-    private fun saveTransactions(transactions: List<Transaction>) {
+    private fun transactionsToJsonArray(transactions: List<Transaction>): JSONArray {
+        val prefs = getSharedPreferences(prefsName, MODE_PRIVATE)
+        if (prefs.contains(transactionsKey)) {
+            LocalHistorySafety.requireReadableBeforeOverwrite(
+                prefs.getString(transactionsKey, null)
+            )
+        }
         val array = JSONArray()
 
         transactions.forEach { transaction ->
@@ -788,9 +816,13 @@ class MainActivity : Activity() {
             )
         }
 
+        return array
+    }
+
+    private fun saveTransactions(transactions: List<Transaction>) {
         getSharedPreferences(prefsName, MODE_PRIVATE)
             .edit()
-            .putString(transactionsKey, array.toString())
+            .putString(transactionsKey, transactionsToJsonArray(transactions).toString())
             .apply()
     }
 
@@ -813,6 +845,12 @@ class MainActivity : Activity() {
     }
 
     private fun saveSnapshots(snapshots: List<Snapshot>) {
+        val prefs = getSharedPreferences(prefsName, MODE_PRIVATE)
+        if (prefs.contains(snapshotsKey)) {
+            SnapshotHistorySafety.requireReadableBeforeOverwrite(
+                prefs.getString(snapshotsKey, null)
+            )
+        }
         val array = JSONArray()
         snapshots.forEach { snapshot ->
             array.put(
@@ -838,6 +876,68 @@ class MainActivity : Activity() {
             )
         )
         saveSnapshots(snapshots)
+    }
+
+    /**
+     * Commit one managed Android financial change as a single preference
+     * transaction: holdings, event history and chart snapshot move together.
+     * Windows Core and cloud files remain read-only/out of scope.
+     */
+    private fun showFinancialSaveError(error: Exception) {
+        AlertDialog.Builder(this)
+            .setTitle(ui("Transaction not saved"))
+            .setMessage(
+                ui("The financial change could not be confirmed. " +
+                    "Check the portfolio and Activity before retrying.") +
+                    "\n" + (error.message ?: "")
+            )
+            .setPositiveButton(ui("OK"), null)
+            .show()
+    }
+
+    private fun commitManagedPortfolioChange(
+        assets: List<Asset>,
+        transactions: List<Transaction>
+    ) {
+        val ids = transactions.map { it.id }
+        require(ids.all { it.isNotBlank() } && ids.distinct().size == ids.size) {
+            "Cannot save duplicate or missing transaction identities."
+        }
+        val total = assets.sumOf { it.value }
+        require(total.isFinite() && total >= 0.0 &&
+            assets.all { it.quantity.isFinite() && it.price.isFinite() &&
+                it.averageCost.isFinite() && it.quantity >= 0.0 &&
+                it.price >= 0.0 && it.averageCost >= 0.0 }) {
+            "Invalid financial result; no transaction was saved."
+        }
+        val prefs = getSharedPreferences(prefsName, MODE_PRIVATE)
+        val nextAssets = assetsToJsonArray(assets).toString()
+        val nextTransactions = transactionsToJsonArray(transactions).toString()
+        // loadSnapshots historically returned [] on malformed JSON. Validate the
+        // durable original first or an unrelated BUY could erase price history.
+        SnapshotHistorySafety.requireReadableBeforeOverwrite(
+            prefs.getString(snapshotsKey, null)
+        )
+        val snapshots = loadSnapshots()
+        snapshots.add(Snapshot(total, System.currentTimeMillis()))
+        val nextSnapshots = JSONArray().apply {
+            snapshots.forEach { value ->
+                put(JSONObject().put("totalValue", value.totalValue)
+                    .put("timestamp", value.timestamp))
+            }
+        }.toString()
+        val editor = prefs.edit()
+            .putString(assetsKey, nextAssets)
+            .putString(transactionsKey, nextTransactions)
+            .putString(snapshotsKey, nextSnapshots)
+        val previousAssets = prefs.getString(assetsKey, null)
+        if (!previousAssets.isNullOrBlank() && previousAssets != nextAssets &&
+            isValidLocalAssetsJson(previousAssets)) {
+            editor.putString(lastValidAssetsKey, previousAssets)
+        }
+        check(editor.commit()) {
+            "Android could not confirm the transaction save. Check the portfolio before retrying."
+        }
     }
 
     private fun formatToman(value: Double): String {
@@ -894,9 +994,8 @@ class MainActivity : Activity() {
         }.format(value)
     }
 
-    private fun formatDate(timestamp: Long): String {
-        return SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.US).format(Date(timestamp))
-    }
+    private fun formatDate(timestamp: Long): String =
+        TehranDisplayTime.gregorian(timestamp)
 
     private fun loadTolerance(): Double {
         val raw = getSharedPreferences(prefsName, MODE_PRIVATE)
@@ -956,6 +1055,7 @@ class MainActivity : Activity() {
 
     private fun scheduleAutoRefresh() {
         stopAutoRefresh()
+        if (localDataProblem() != null) return
         // Windows Core home never performs background edits on Android's
         // unrelated local portfolio while the read-only copy is displayed.
         if (isWindowsCoreHomeSelected()) return
@@ -976,15 +1076,8 @@ class MainActivity : Activity() {
         autoRefreshHandler.postDelayed(runnable, delay)
     }
 
-    private fun periodStartMillis(period: String): Long {
-        val duration = when (period) {
-            "Day" -> 24L * 60L * 60L * 1000L
-            "Week" -> 7L * 24L * 60L * 60L * 1000L
-            "Year" -> 365L * 24L * 60L * 60L * 1000L
-            else -> 30L * 24L * 60L * 60L * 1000L
-        }
-        return System.currentTimeMillis() - duration
-    }
+    private fun periodStartMillis(period: String): Long =
+        TehranPeriodWindow.startMillis(period, System.currentTimeMillis())
 
     private fun hashPin(pin: String): String {
         val digest = MessageDigest.getInstance("SHA-256")
@@ -1255,6 +1348,73 @@ class MainActivity : Activity() {
         startActivity(Intent.createChooser(intent, "Share AI Portfolio Summary"))
     }
 
+    /** A damaged preference must never be mistaken for an empty portfolio. */
+    private fun localDataProblem(): String? {
+        val prefs = getSharedPreferences(prefsName, MODE_PRIVATE)
+        val assets = prefs.getString(assetsKey, null)
+        if (assets == null || !isValidLocalAssetsJson(assets)) {
+            return "Stored Android assets could not be verified."
+        }
+        return try {
+            LocalHistorySafety.requireReadableBeforeOverwrite(
+                prefs.getString(transactionsKey, null)
+            )
+            SnapshotHistorySafety.requireReadableBeforeOverwrite(
+                prefs.getString(snapshotsKey, null)
+            )
+            null
+        } catch (error: Exception) {
+            error.message ?: "Stored Android portfolio history could not be verified."
+        }
+    }
+
+    /**
+     * Recovery-only UI: no trading, refresh, reset, import-by-guess or cloud
+     * writes. Preserve original bytes for assisted, verified recovery.
+     */
+    private fun showLocalStorageProtectionScreen(reason: String) {
+        onPortfolioScreen = false
+        onPriceCenterScreen = false
+        stopAutoRefresh()
+        stopSmartCloudSync()
+        val root = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(22), dp(24), dp(22), dp(24))
+            setBackgroundColor(PortfolioAppearance.BACKGROUND)
+        }
+        root.addView(TextView(this).apply {
+            text = ui("Local data protection")
+            textSize = 23f
+            setTypeface(typeface, Typeface.BOLD)
+            setTextColor(PortfolioAppearance.ERROR)
+        })
+        root.addView(TextView(this).apply {
+            text = ui("Stored Android data was not changed. Editing and sync are disabled until this data is safely recovered.") +
+                "\n\n" + reason
+            textSize = 15f
+            setTextColor(PortfolioAppearance.TEXT_PRIMARY)
+            setPadding(0, dp(14), 0, dp(20))
+        })
+        root.addView(Button(this).apply {
+            text = ui("Check local data again")
+            isAllCaps = false
+            setOnClickListener { showPortfolioScreen() }
+        })
+        if (windowsCoreCacheFile().isFile) {
+            root.addView(Button(this).apply {
+                text = ui("Show Windows Portfolio (Read-only)")
+                isAllCaps = false
+                setOnClickListener {
+                    if (!mayEnterWindowsCoreHome()) return@setOnClickListener
+                    getSharedPreferences(prefsName, MODE_PRIVATE).edit()
+                        .putBoolean(windowsCoreHomeKey, true).apply()
+                    showPortfolioScreen()
+                }
+            })
+        }
+        showContentRespectingSystemBars(ScrollView(this).apply { addView(root) })
+    }
+
     private fun showPortfolioScreen() {
         if (isWindowsCoreHomeSelected()) {
             try {
@@ -1273,6 +1433,10 @@ class MainActivity : Activity() {
                     Toast.LENGTH_LONG
                 ).show()
             }
+        }
+        localDataProblem()?.let {
+            showLocalStorageProtectionScreen(it)
+            return
         }
         onPortfolioScreen = true
         onPriceCenterScreen = false
@@ -2425,7 +2589,7 @@ class MainActivity : Activity() {
             val input = EditText(this).apply {
                 hint = ui("Target %")
                 inputType = InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_FLAG_DECIMAL
-                setText(formatQuantity(asset.targetPercent))
+                setText(EditableFinancialNumber.format(asset.targetPercent))
             }
             inputs.add(index to input)
             form.addView(input)
@@ -2493,7 +2657,7 @@ class MainActivity : Activity() {
         val input = EditText(this).apply {
             hint = ui("Tolerance (%)")
             inputType = InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_FLAG_DECIMAL
-            setText(formatQuantity(loadTolerance()))
+            setText(EditableFinancialNumber.format(loadTolerance()))
             setPadding(dp(20), dp(8), dp(20), 0)
         }
 
@@ -2640,19 +2804,19 @@ class MainActivity : Activity() {
         val quantityInput = EditText(this).apply {
             hint = ui("Quantity")
             inputType = InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_FLAG_DECIMAL
-            setText(existing?.let { formatQuantity(it.quantity).replace(",", "") } ?: "")
+            setText(existing?.let { EditableFinancialNumber.format(it.quantity) } ?: "")
         }
 
         val priceInput = EditText(this).apply {
             hint = ui("Current price per unit (Toman)")
             inputType = InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_FLAG_DECIMAL
-            setText(existing?.let { it.price.toLong().toString() } ?: "")
+            setText(existing?.let { EditableFinancialNumber.format(it.price) } ?: "")
         }
 
         val averageCostInput = EditText(this).apply {
             hint = ui("Average cost per unit (Toman)")
             inputType = InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_FLAG_DECIMAL
-            setText(existing?.let { it.averageCost.toLong().toString() } ?: "")
+            setText(existing?.let { EditableFinancialNumber.format(it.averageCost) } ?: "")
         }
 
         val priceSourceSpinner = Spinner(this)
@@ -2683,7 +2847,7 @@ class MainActivity : Activity() {
         val targetInput = EditText(this).apply {
             hint = ui("Target allocation (%)")
             inputType = InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_FLAG_DECIMAL
-            setText(existing?.let { formatQuantity(it.targetPercent) } ?: "0")
+            setText(existing?.let { EditableFinancialNumber.format(it.targetPercent) } ?: "0")
         }
 
         form.addView(nameInput)
@@ -2732,6 +2896,39 @@ class MainActivity : Activity() {
                         symbolInput.error = ui("Nobitex source is currently for Crypto assets")
                     else -> {
                         val assets = loadAssets()
+                        if (category == "Cash" && quantity != 1.0) {
+                            quantityInput.error = ui("Cash quantity must be 1")
+                            return@setOnClickListener
+                        }
+                        if (!(quantity * price).isFinite()) {
+                            priceInput.error = ui("Asset value is too large")
+                            return@setOnClickListener
+                        }
+                        if (isEditing) {
+                            // A dialog left open while a trade/cloud callback runs
+                            // must not create a duplicate or silently replace an asset.
+                            val original = existing ?: return@setOnClickListener
+                            if (index == null || index !in assets.indices ||
+                                !assetsEquivalent(assets[index], original) ||
+                                assets.count { it.name == original.name } != 1) {
+                                showFinancialSaveError(IllegalStateException(
+                                    "Asset changed while editing. Reopen Edit Asset."
+                                ))
+                                return@setOnClickListener
+                            }
+                            val hasManagedHistory = loadTransactions().any {
+                                it.managed && it.assetName == original.name
+                            }
+                            if (hasManagedHistory &&
+                                (name != original.name || category != original.category ||
+                                quantity != original.quantity || averageCost != original.averageCost)) {
+                                showFinancialSaveError(IllegalStateException(
+                                    "This asset has managed transactions. Edit the latest BUY " +
+                                        "in Activity or create a new trade; do not rewrite its ledger."
+                                ))
+                                return@setOnClickListener
+                            }
+                        }
                         val updated = (existing ?: Asset(
                             name, category, quantity, price, averageCost, targetPercent,
                             includeTargetCheck.isChecked, priceSource, symbol
@@ -2747,8 +2944,8 @@ class MainActivity : Activity() {
                             symbol = symbol
                         )
 
-                        if (isEditing && index != null && index in assets.indices) {
-                            assets[index] = updated
+                        if (isEditing) {
+                            assets[index!!] = updated
                         } else {
                             assets.add(updated)
                         }
@@ -2975,6 +3172,14 @@ class MainActivity : Activity() {
             card.addView(transactionRow)
         }
 
+        // An explicit edit action is discoverable on touch screens; tapping
+        // the name still works for existing users.
+        card.addView(Button(this).apply {
+            text = ui("Edit Asset")
+            isAllCaps = false
+            setOnClickListener { showAssetDialog(index, asset) }
+        })
+
         card.addView(
             TextView(this).apply {
                 text = ui("Tap name to edit • Long press card to delete")
@@ -3014,7 +3219,7 @@ class MainActivity : Activity() {
         val priceInput = EditText(this).apply {
             hint = ui("Transaction price per unit (Toman)")
             inputType = InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_FLAG_DECIMAL
-            setText(asset.price.toLong().toString())
+            setText(EditableFinancialNumber.format(asset.price))
         }
 
         form.addView(quantityInput)
@@ -3048,18 +3253,32 @@ class MainActivity : Activity() {
                         }
 
                         val current = assets[index]
+                        // A stale dialog must not change an asset that was
+                        // updated, renamed or replaced after it opened.
+                        if (!assetsEquivalent(current, asset) ||
+                            assets.count { it.name == current.name } != 1 ||
+                            (!isBuy && quantity > current.quantity)) {
+                            showFinancialSaveError(IllegalStateException(
+                                "Asset changed or is ambiguous. Reopen the trade editor."
+                            ))
+                            return@setOnClickListener
+                        }
                         val transactions = loadTransactions()
 
                         if (isBuy) {
-                            val newQuantity = current.quantity + quantity
-                            val newAverageCost =
-                                ((current.quantity * current.averageCost) + (quantity * transactionPrice)) /
-                                    newQuantity
-
+                            val calculation = try {
+                                BuyCorrection.calculate(
+                                    current.quantity, current.averageCost,
+                                    quantity, transactionPrice
+                                )
+                            } catch (error: Exception) {
+                                showFinancialSaveError(error)
+                                return@setOnClickListener
+                            }
                             val updatedAsset = current.copy(
-                                quantity = newQuantity,
-                                price = transactionPrice,
-                                averageCost = newAverageCost
+                                quantity = calculation.quantity,
+                                price = calculation.currentPrice,
+                                averageCost = calculation.averageCost
                             )
                             assets[index] = updatedAsset
 
@@ -3079,6 +3298,13 @@ class MainActivity : Activity() {
                             )
                         } else {
                             val realizedProfit = (transactionPrice - current.averageCost) * quantity
+                            if (!realizedProfit.isFinite() ||
+                                !(transactionPrice * quantity).isFinite()) {
+                                showFinancialSaveError(IllegalArgumentException(
+                                    "Trade amount is too large; nothing was saved."
+                                ))
+                                return@setOnClickListener
+                            }
                             val newQuantity = current.quantity - quantity
 
                             val updatedAsset = if (newQuantity <= 0.0000001) {
@@ -3107,12 +3333,14 @@ class MainActivity : Activity() {
                             )
                         }
 
-                        pushUndoCheckpoint()
-                        saveAssets(assets)
-                        saveTransactions(transactions)
-                        recordSnapshot(assets)
-                        dialog.dismiss()
-                        showPortfolioScreen()
+                        try {
+                            pushUndoCheckpoint()
+                            commitManagedPortfolioChange(assets, transactions)
+                            dialog.dismiss()
+                            showPortfolioScreen()
+                        } catch (error: Exception) {
+                            showFinancialSaveError(error)
+                        }
                     }
                 }
             }
@@ -3122,6 +3350,10 @@ class MainActivity : Activity() {
     }
 
     private fun showPriceCenterScreen() {
+        localDataProblem()?.let {
+            showLocalStorageProtectionScreen(it)
+            return
+        }
         onPortfolioScreen = false
         onPriceCenterScreen = true
         val assets = loadAssets()
@@ -3185,7 +3417,7 @@ class MainActivity : Activity() {
             val input = EditText(this).apply {
                 hint = ui("Current price (Toman)")
                 inputType = InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_FLAG_DECIMAL
-                setText(asset.price.toLong().toString())
+                setText(EditableFinancialNumber.format(asset.price))
             }
 
             inputs.add(index to input)
@@ -3474,7 +3706,7 @@ class MainActivity : Activity() {
         val input = EditText(this).apply {
             hint = ui("Final balance (Toman)")
             inputType = InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_FLAG_DECIMAL
-            setText(asset.value.toLong().toString())
+            setText(EditableFinancialNumber.format(asset.value))
             setPadding(dp(20), dp(8), dp(20), 0)
         }
 
@@ -3502,8 +3734,19 @@ class MainActivity : Activity() {
                 }
 
                 val current = assets[index]
+                if (!assetsEquivalent(current, asset) ||
+                    assets.count { it.name == current.name } != 1) {
+                    showFinancialSaveError(IllegalStateException(
+                        "Cash account changed while the editor was open."
+                    ))
+                    return@setOnClickListener
+                }
                 val oldBalance = current.value
                 val difference = finalBalance - oldBalance
+                if (kotlin.math.abs(difference) <= 0.01) {
+                    dialog.dismiss()
+                    return@setOnClickListener
+                }
 
                 assets[index] = current.copy(
                     quantity = 1.0,
@@ -3530,12 +3773,14 @@ class MainActivity : Activity() {
                     )
                 }
 
-                pushUndoCheckpoint()
-                saveAssets(assets)
-                saveTransactions(transactions)
-                recordSnapshot(assets)
-                dialog.dismiss()
-                showPortfolioScreen()
+                try {
+                    pushUndoCheckpoint()
+                    commitManagedPortfolioChange(assets, transactions)
+                    dialog.dismiss()
+                    showPortfolioScreen()
+                } catch (error: Exception) {
+                    showFinancialSaveError(error)
+                }
             }
         }
 
@@ -3586,8 +3831,11 @@ class MainActivity : Activity() {
         if (!transaction.managed || !isLatestManagedTransactionForAsset(transaction, allTransactions)) {
             return false
         }
-
+        // Looking up by name is a legacy compatibility constraint: reject
+        // ambiguous names rather than reversing the wrong asset's transaction.
+        val sameNamed = assets.count { it.name == transaction.assetName }
         val expectedAfter = assetFromJson(transaction.afterAssetJson)
+        if (sameNamed > 1 || (expectedAfter != null && sameNamed != 1)) return false
         val current = assets.firstOrNull { it.name == transaction.assetName }
 
         return if (expectedAfter == null) {
@@ -3595,6 +3843,113 @@ class MainActivity : Activity() {
         } else {
             current != null && assetsEquivalent(current, expectedAfter)
         }
+    }
+
+    /**
+     * Only a verified, latest BUY may be corrected. Keep the original transaction
+     * ID and timestamp so backup restores cannot duplicate it.
+     */
+    private fun showCorrectBuyDialog(transactionId: String) {
+        val transactions = loadTransactions()
+        val transaction = transactions.firstOrNull { it.id == transactionId } ?: return
+        val assets = loadAssets()
+        if (transaction.type != "BUY" ||
+            !canSafelyRevertTransaction(transaction, transactions, assets)) {
+            AlertDialog.Builder(this)
+                .setTitle(ui("Correction unavailable"))
+                .setMessage(ui("A later change prevents safe correction. Nothing was changed."))
+                .setPositiveButton(ui("OK"), null).show()
+            return
+        }
+        val quantityInput = EditText(this).apply {
+            hint = ui("Quantity")
+            inputType = InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_FLAG_DECIMAL
+            setText(EditableFinancialNumber.format(transaction.quantity))
+        }
+        val priceInput = EditText(this).apply {
+            hint = ui("Transaction price per unit (Toman)")
+            inputType = InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_FLAG_DECIMAL
+            setText(EditableFinancialNumber.format(transaction.price))
+        }
+        val form = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(20), dp(10), dp(20), 0)
+            addView(quantityInput)
+            addView(priceInput)
+        }
+        val dialog = AlertDialog.Builder(this)
+            .setTitle(ui("Edit BUY transaction"))
+            .setView(form)
+            .setNegativeButton(ui("Cancel"), null)
+            .setPositiveButton(ui("Save correction"), null)
+            .create()
+        dialog.setOnShowListener {
+            dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
+                val quantity = UiText.parseUserNumber(quantityInput.text.toString().trim().replace(",", ""))
+                val price = UiText.parseUserNumber(priceInput.text.toString().trim().replace(",", ""))
+                if (quantity == null || quantity <= 0.0 || !quantity.isFinite()) {
+                    quantityInput.error = ui("Enter a quantity greater than zero")
+                    return@setOnClickListener
+                }
+                if (price == null || price < 0.0 || !price.isFinite()) {
+                    priceInput.error = ui("Enter a valid transaction price")
+                    return@setOnClickListener
+                }
+                try {
+                    // Recheck against disk because the editor might have been open
+                    // while a different portfolio operation completed.
+                    val currentTransactions = loadTransactions()
+                    val current = currentTransactions.singleOrNull { it.id == transactionId }
+                        ?: throw IllegalStateException("Transaction changed; no correction applied.")
+                    val currentAssets = loadAssets()
+                    check(current == transaction && current.type == "BUY" &&
+                        canSafelyRevertTransaction(current, currentTransactions, currentAssets)) {
+                        "Transaction or portfolio changed; no correction applied."
+                    }
+                    if (current.quantity == quantity && current.price == price) {
+                        dialog.dismiss()
+                        return@setOnClickListener
+                    }
+                    val before = assetFromJson(current.beforeAssetJson)
+                        ?: throw IllegalStateException("Original asset state is unavailable.")
+                    val after = assetFromJson(current.afterAssetJson)
+                        ?: throw IllegalStateException("Recorded post-trade state is unavailable.")
+                    check(before.name == current.assetName && after.name == current.assetName &&
+                        currentAssets.count { it.name == current.assetName } == 1) {
+                        "Asset identity is ambiguous; no correction applied."
+                    }
+                    val calculation = BuyCorrection.calculate(
+                        before.quantity, before.averageCost, quantity, price
+                    )
+                    val correctedAsset = before.copy(
+                        quantity = calculation.quantity,
+                        averageCost = calculation.averageCost,
+                        price = calculation.currentPrice
+                    )
+                    val correctedTransaction = current.copy(
+                        quantity = quantity, price = price,
+                        afterAssetJson = assetToJson(correctedAsset)
+                    )
+                    val assetIndex = currentAssets.indexOfFirst { it.name == current.assetName }
+                    val transactionIndex = currentTransactions.indexOfFirst { it.id == transactionId }
+                    currentAssets[assetIndex] = correctedAsset
+                    currentTransactions[transactionIndex] = correctedTransaction
+                    // Keep the pre-Restore recovery copy intact; use the same
+                    // atomic ledger+history+snapshot commit as BUY/SELL/Revert.
+                    pushUndoCheckpoint()
+                    commitManagedPortfolioChange(currentAssets, currentTransactions)
+                    dialog.dismiss()
+                    showPortfolioScreen()
+                } catch (error: Exception) {
+                    AlertDialog.Builder(this)
+                        .setTitle(ui("Correction unavailable"))
+                        .setMessage(error.message ?: "Correction rejected safely.")
+                        .setPositiveButton(ui("OK"), null)
+                        .show()
+                }
+            }
+        }
+        dialog.show()
     }
 
     private fun revertTransaction(transactionId: String) {
@@ -3628,11 +3983,13 @@ class MainActivity : Activity() {
         }
 
         transactions.removeAll { it.id == transactionId }
-        saveAssets(assets)
-        saveTransactions(transactions)
-        recordSnapshot(assets)
-        showPortfolioScreen()
-        Toast.makeText(this, ui("Transaction reverted."), Toast.LENGTH_SHORT).show()
+        try {
+            commitManagedPortfolioChange(assets, transactions)
+            showPortfolioScreen()
+            Toast.makeText(this, ui("Transaction reverted."), Toast.LENGTH_SHORT).show()
+        } catch (error: Exception) {
+            showFinancialSaveError(error)
+        }
     }
 
     private fun showActivityDialog(page: Int = 0) {
@@ -3696,6 +4053,14 @@ class MainActivity : Activity() {
                                 }
                                 .show()
                         }
+                    }
+
+                    if (transaction.type == "BUY" && canRevert) {
+                        card.addView(Button(this).apply {
+                            text = ui("Edit BUY transaction")
+                            isAllCaps = false
+                            setOnClickListener { showCorrectBuyDialog(transaction.id) }
+                        })
                     }
 
                     card.addView(
@@ -3781,6 +4146,49 @@ class MainActivity : Activity() {
                 }
             )
         } else {
+            val trend = PortfolioTrend.points(snapshots.map {
+                PortfolioTrend.Sample(it.timestamp, it.totalValue)
+            })
+            if (trend.size >= 2) {
+                content.addView(
+                    object : View(this) {
+                        private val linePaint = android.graphics.Paint(
+                            android.graphics.Paint.ANTI_ALIAS_FLAG
+                        ).apply {
+                            color = PortfolioAppearance.ACCENT
+                            strokeWidth = dp(3).toFloat()
+                            style = android.graphics.Paint.Style.STROKE
+                            strokeJoin = android.graphics.Paint.Join.ROUND
+                        }
+                        private val gridPaint = android.graphics.Paint(
+                            android.graphics.Paint.ANTI_ALIAS_FLAG
+                        ).apply {
+                            color = PortfolioAppearance.BORDER
+                            strokeWidth = dp(1).toFloat()
+                        }
+
+                        override fun onDraw(canvas: android.graphics.Canvas) {
+                            super.onDraw(canvas)
+                            val left = dp(12).toFloat()
+                            val top = dp(12).toFloat()
+                            val right = width.toFloat() - dp(12)
+                            val bottom = height.toFloat() - dp(12)
+                            if (right <= left || bottom <= top) return
+                            canvas.drawLine(left, bottom, right, bottom, gridPaint)
+                            val path = android.graphics.Path()
+                            trend.forEachIndexed { index, point ->
+                                val x = left + point.x * (right - left)
+                                val y = bottom - point.y * (bottom - top)
+                                if (index == 0) path.moveTo(x, y) else path.lineTo(x, y)
+                            }
+                            canvas.drawPath(path, linePaint)
+                        }
+                    },
+                    LinearLayout.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT, dp(150)
+                    ).apply { bottomMargin = dp(12) }
+                )
+            }
             snapshots.forEachIndexed { index, snapshot ->
                 val previous = snapshots.getOrNull(index + 1)
                 val change = previous?.let { snapshot.totalValue - it.totalValue }
@@ -3884,6 +4292,7 @@ class MainActivity : Activity() {
 
     private fun scheduleSmartCloudSync() {
         stopSmartCloudSync()
+        if (localDataProblem() != null) return
         if (isWindowsCoreHomeSelected()) return
         if (!isCloudAutoSyncEnabled() || loadCloudBackupUri() == null) {
             return
@@ -4992,6 +5401,34 @@ class MainActivity : Activity() {
             ))
         }
 
+        // Read-only v0.13 policy. Never count reserve goals as assets or send
+        // them to the editable Android local ledger.
+        data.reserveStatus?.let { reserve ->
+            val reservePanel = panel()
+            reservePanel.addView(body(ui("Cash Reserve (Windows read-only)"), true))
+            reservePanel.addView(body(
+                ui("Cash reserve target (Toman)") + ": " + amount(reserve.targetToman)
+            ))
+            reservePanel.addView(body(
+                ui("Windows cash available") + ": " + amount(reserve.actualToman)
+            ))
+            val descriptor = when (reserve.kind) {
+                WindowsReserveStatus.Kind.SURPLUS -> ui("Cash reserve surplus")
+                WindowsReserveStatus.Kind.SHORTFALL -> ui("Cash reserve shortfall")
+                WindowsReserveStatus.Kind.EXACT -> ui("Cash reserve on target")
+            }
+            reservePanel.addView(body(
+                descriptor + ": " + amount(kotlin.math.abs(reserve.differenceToman))
+            ))
+            data.policyTolerancePercent?.let { tolerance ->
+                reservePanel.addView(body(
+                    ui("Global tolerance (%)") + ": " +
+                        CoreSnapshotPreview.formatQuantityForDisplay(tolerance) + "%"
+                ))
+            }
+            container.addView(reservePanel)
+        }
+
         container.addView(body(ui("Windows holdings"), true))
         val holdings = panel()
         data.holdings.sortedWith(
@@ -5445,6 +5882,10 @@ class MainActivity : Activity() {
 
     private fun buildAndroidBackupPayload(): JSONObject {
         val prefs = getSharedPreferences(prefsName, MODE_PRIVATE)
+        // Do not certify a backup with silently truncated or duplicated history.
+        LocalHistorySafety.requireReadableBeforeOverwrite(
+            prefs.getString(transactionsKey, "[]")
+        )
 
         return JSONObject().apply {
             put("backupVersion", 3)
@@ -5596,20 +6037,6 @@ class MainActivity : Activity() {
         )
     }
 
-    private fun snapshotsWithCurrentTotal(source: JSONArray, assets: List<Asset>): JSONArray {
-        val result = JSONArray()
-        for (index in 0 until source.length()) {
-            result.put(source.get(index))
-        }
-        result.put(
-            JSONObject().apply {
-                put("totalValue", assets.sumOf { it.value })
-                put("timestamp", System.currentTimeMillis())
-            }
-        )
-        return result
-    }
-
     private fun applySharedBackup(
         validated: PortfolioSafety.ValidatedBackup,
         mergeLocalHistory: Boolean = false
@@ -5630,6 +6057,8 @@ class MainActivity : Activity() {
         }
         val localSnapshots = JSONArray(prefs.getString(snapshotsKey, "[]") ?: "[]")
         val remoteSnapshots = supplemental?.optJSONArray("snapshots") ?: JSONArray()
+        // Restoring an exported snapshot is not a new market valuation event.
+        // Preserve source history exactly; repeated imports must not invent points.
         val sourceSnapshots = if (mergeLocalHistory) {
             PortfolioSafety.mergeHistory(localSnapshots, remoteSnapshots, "timestamp")
         } else {
@@ -5649,7 +6078,7 @@ class MainActivity : Activity() {
         val committed = prefs.edit()
             .putString(assetsKey, assetsToJsonArray(plan.assets).toString())
             .putString(transactionsKey, transactions.toString())
-            .putString(snapshotsKey, snapshotsWithCurrentTotal(sourceSnapshots, plan.assets).toString())
+            .putString(snapshotsKey, sourceSnapshots.toString())
             .putString(toleranceKey, plan.tolerance.toString())
             .putString(displayUnitKey, displayUnit)
             .putString(summaryPeriodKey, summaryPeriod)
@@ -5901,8 +6330,15 @@ class MainActivity : Activity() {
                     runStorageOperation(
                         label = "Exporting backup",
                         task = {
-                            writeUriText(uri, createBackupJson())
-                            Unit
+                            // Validate exactly what will be written and verify provider readback.
+                            // A successful OutputStream.close alone cannot prove a complete backup.
+                            val backup = createBackupJson()
+                            PortfolioSafety.validateBackup(backup)
+                            PortfolioSafety.writeAndVerifyBackup(
+                                backup,
+                                write = { writeUriText(uri, it) },
+                                read = { readUriText(uri) }
+                            )
                         },
                         onSuccess = {
                             Toast.makeText(this, ui("Backup exported safely."), Toast.LENGTH_SHORT).show()
@@ -5912,22 +6348,71 @@ class MainActivity : Activity() {
                 }
 
                 importBackupRequestCode -> {
-                    val expectedLocalFingerprint = sharedFingerprint(buildSharedPortfolio())
+                    // Asset fingerprints alone omit history; a transaction can change
+                    // while Android's document provider is reading a selected file.
+                    val expectedLocalState = capturePortfolioState().toString()
                     runStorageOperation(
                         label = "Validating backup",
                         task = {
                             val raw = readUriText(uri)
-                            PortfolioSafety.validateBackup(raw)
-                            raw
+                            val validated = PortfolioSafety.validateBackup(raw)
+                            when (validated.kind) {
+                                PortfolioSafety.BackupKind.SHARED ->
+                                    validated.sharedPortfolio?.let(
+                                        PortfolioSafety::requireEditableAndroidPortfolio
+                                    )
+                                PortfolioSafety.BackupKind.LEGACY_ANDROID ->
+                                    PortfolioSafety.requireEditableAndroidPortfolio(validated.root)
+                            }
+                            raw to validated
                         },
-                        onSuccess = { raw ->
-                            try {
-                                check(sharedFingerprint(buildSharedPortfolio()) == expectedLocalFingerprint) {
-                                    "Phone data changed while the file was being read. Nothing was overwritten."
-                                }
+                        onSuccess = { (raw, validated) ->
+                            fun verifyUnchangedAndRestore() {
+                                PortfolioSafety.requireUnchangedLocalRestoreState(
+                                    expectedLocalState, capturePortfolioState().toString()
+                                )
+                                PortfolioSafety.requireCompleteManualRestoreHistory(
+                                    validated,
+                                    localTransactionsExist = loadTransactions().isNotEmpty(),
+                                    localSnapshotsExist = loadSnapshots().isNotEmpty()
+                                )
                                 restoreBackupJson(raw)
-                                Toast.makeText(this, ui("Backup restored safely."), Toast.LENGTH_SHORT).show()
+                                Toast.makeText(
+                                    this, ui("Backup restored safely."), Toast.LENGTH_SHORT
+                                ).show()
                                 showPortfolioScreen()
+                            }
+                            try {
+                                PortfolioSafety.requireUnchangedLocalRestoreState(
+                                    expectedLocalState, capturePortfolioState().toString()
+                                )
+                                PortfolioSafety.requireCompleteManualRestoreHistory(
+                                    validated,
+                                    localTransactionsExist = loadTransactions().isNotEmpty(),
+                                    localSnapshotsExist = loadSnapshots().isNotEmpty()
+                                )
+                                val hasLocalData = loadAssets().isNotEmpty() ||
+                                    loadTransactions().isNotEmpty() || loadSnapshots().isNotEmpty()
+                                if (hasLocalData) {
+                                    val message = ui("The selected backup contains ") +
+                                        validated.incomingAssetCount +
+                                        ui(" assets. Restoring replaces the phone portfolio and its history. ") +
+                                        ui("The current local data is preserved for recovery. Continue?")
+                                    AlertDialog.Builder(this)
+                                        .setTitle(ui("Confirm backup restore"))
+                                        .setMessage(message)
+                                        .setNegativeButton(ui("Cancel"), null)
+                                        .setPositiveButton(ui("Restore backup")) { _, _ ->
+                                            try {
+                                                verifyUnchangedAndRestore()
+                                            } catch (error: Exception) {
+                                                showBackupFileError(error)
+                                            }
+                                        }
+                                        .show()
+                                } else {
+                                    verifyUnchangedAndRestore()
+                                }
                             } catch (error: Exception) {
                                 showBackupFileError(error)
                             }
