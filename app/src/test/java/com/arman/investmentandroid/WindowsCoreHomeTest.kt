@@ -13,7 +13,8 @@ import java.util.Base64
 
 class WindowsCoreHomeTest {
     /** Pure fixture with the same 11 required Core tables as Windows v0.12. */
-    private fun exportedSnapshot(quantity: Double = 1.0, value: Double? = 5_000_000.0): String {
+    private fun exportedSnapshot(quantity: Double = 1.0, value: Double? = 5_000_000.0,
+        otherAssetsToman: Double? = null): String {
         val tables = JSONObject()
         val names = listOf(
             "schema_meta", "imported_snapshots", "opening_accounts",
@@ -59,6 +60,14 @@ class WindowsCoreHomeTest {
                 .put("rows", rows).put("rowids", rowids))
         }
 
+        if (otherAssetsToman != null) {
+            tables.put("portfolio_settings", JSONObject()
+                .put("columns", JSONArray().put("key").put("value"))
+                .put("rows", JSONArray().put(JSONArray()
+                    .put("other_assets_toman").put(otherAssetsToman)))
+                .put("rowids", JSONArray().put(1)))
+        }
+
         val holding = JSONObject()
             .put("id", "btc").put("name", "Bitcoin").put("quantity", quantity)
             .put("value_toman", value ?: JSONObject.NULL)
@@ -99,6 +108,20 @@ class WindowsCoreHomeTest {
         assertEquals(6_500_000.0, overview.completeValueToman!!, 0.0)
         assertEquals(0, overview.missingPriceCount)
         assertEquals(0, overview.transactionCount)
+    }
+
+    @Test fun fixedAssetsAreIncludedInWindowsNetWorthButNotHoldings() {
+        val overview = WindowsCoreHome.inspect(exportedSnapshot(otherAssetsToman = 200_000_000.0))
+        assertEquals(200_000_000.0, overview.nonTargetAssetsToman, 0.0)
+        assertEquals(206_500_000.0, overview.completeValueToman!!, 0.0)
+        assertEquals(1, overview.holdings.size)
+        assertEquals(1_500_000.0, overview.cashToman, 0.0)
+    }
+
+    @Test fun negativeFixedAssetSettingIsRejected() {
+        assertThrows(IllegalArgumentException::class.java) {
+            WindowsCoreHome.inspect(exportedSnapshot(otherAssetsToman = -2.0))
+        }
     }
 
     @Test fun missingNonzeroQuoteIsExplicitlyIncomplete() {

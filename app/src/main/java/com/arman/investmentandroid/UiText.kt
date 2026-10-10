@@ -3,14 +3,31 @@ package com.arman.investmentandroid
 /** Translate display labels without changing persisted portfolio keys. */
 object UiText {
     private val fa = mapOf(
+        "AI Advisor — Preview" to "مشاور هوشمند — آزمایشی",
+        "AI Advisor — Offline preview" to "مشاور هوشمند — آزمایشی آفلاین",
+        "Share privacy-safe percentages" to "اشتراک‌گذاری فقط درصدهای سبد",
+        "Paste recommendation JSON" to "واردکردن پیشنهاد متنی AI",
+        "Recommendation history" to "تاریخچه پیشنهادها",
+        "Export AI journal (manual backup)" to "پشتیبان دستی تاریخچه AI",
+        "Restore AI journal (manual, conflict-checked)" to "بازیابی تاریخچه AI با بررسی تعارض",
+        "Privacy and safety information" to "اطلاعات حریم خصوصی و ایمنی",
+        "AI recommendation journal (local only)" to "تاریخچه پیشنهادهای AI (فقط روی گوشی)",
+        "Restore AI journal — local only" to "بازیابی تاریخچه AI (محلی)",
+        "Validate offline AI suggestion" to "بررسی پیشنهاد آفلاین AI",
+        "AI suggestion — review only" to "پیشنهاد AI — فقط بررسی",
         "Finish the current price or cloud operation before switching portfolio views." to
             "پیش از جابه‌جایی بین سبدها، منتظر پایان به‌روزرسانی قیمت یا همگام‌سازی فعلی بمانید.",
+        "AI Advisor (offline preview)" to "مشاور هوشمند (آزمایشی آفلاین)",
+        "AI Advisor — percentages only (offline)" to "مشاور هوشمند؛ فقط درصدها (آفلاین)",
+        "Non-target fixed assets (net worth only)" to "دارایی‌های ثابت خارج از تخصیص (فقط ارزش خالص)",
         "Windows Portfolio" to "سبد ویندوز",
         "Read-only" to "فقط‌خواندنی",
         "Imported to phone: " to "زمان بارگذاری در گوشی: ",
         "Offline copy only. This is not live synchronization." to
             "این یک نسخه آفلاین است و همگام‌سازی زنده انجام نمی‌شود.",
         "Estimated portfolio value" to "ارزش تقریبی سبد بر اساس آخرین فایل",
+        "Estimated net worth (includes fixed assets)" to "ارزش خالص تخمینی (با دارایی‌های ثابت)",
+        "Net worth (incomplete: missing quotes)" to "ارزش خالص ناقص (کمبود قیمت)",
         "Priced holdings + cash (incomplete)" to "مجموع دارایی‌های قیمت‌دار و نقد (ناقص)",
         "Some nonzero holdings have no price. Total is incomplete." to
             "قیمت بعضی دارایی‌ها موجود نیست؛ ارزش کل ناقص است.",
