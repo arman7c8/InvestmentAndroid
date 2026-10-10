@@ -39,6 +39,18 @@ for need in "$AAPT" "$APKSIGNER" "$SDK/platforms/android-35/android.jar"; do
   [[ -f "$need" ]] || { echo "Stop: Android SDK prerequisite missing: $need" >&2; exit 1; }
 done
 
+# Android AlertDialog renders either a message or list items in the content
+# panel on affected devices. Catch a regression of the AI Advisor action menu.
+python3 - <<'PY'
+from pathlib import Path
+source = Path("app/src/main/java/com/arman/investmentandroid/AiManualAdvisorUi.kt").read_text()
+assert "    fun show() {" in source and "    private fun share()" in source
+menu = source.split("    fun show() {", 1)[1].split("    private fun share()", 1)[0]
+assert ".setItems(" in menu, "AI Advisor action list has been removed"
+assert ".setMessage(" not in menu, "AlertDialog message hides AI Advisor actions on Android"
+print("PASS: AI Advisor action list cannot be hidden by a competing message")
+PY
+
 echo "Testing $SHA with isolated package: $PACKAGE"
 gradle :app:testDebugUnitTest :app:lintDebug :app:assembleDebug \
     "-PpreviewApplicationSuffix=$SUFFIX" --stacktrace
