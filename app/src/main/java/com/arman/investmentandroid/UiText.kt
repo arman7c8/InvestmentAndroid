@@ -5,6 +5,9 @@ object UiText {
     private val fa = mapOf(
         "Finish the current price or cloud operation before switching portfolio views." to
             "پیش از جابه‌جایی بین سبدها، منتظر پایان به‌روزرسانی قیمت یا همگام‌سازی فعلی بمانید.",
+        "AI Advisor (offline preview)" to "مشاور هوشمند (آزمایشی آفلاین)",
+        "AI Advisor — percentages only (offline)" to "مشاور هوشمند؛ فقط درصدها (آفلاین)",
+        "Non-target fixed assets (net worth only)" to "دارایی‌های ثابت خارج از تخصیص (فقط ارزش خالص)",
         "Windows Portfolio" to "سبد ویندوز",
         "Read-only" to "فقط‌خواندنی",
         "Imported to phone: " to "زمان بارگذاری در گوشی: ",
