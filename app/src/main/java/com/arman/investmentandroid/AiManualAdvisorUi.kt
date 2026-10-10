@@ -47,12 +47,16 @@ class AiManualAdvisorUi(
             .setItems(arrayOf(
                 "Share privacy-safe snapshot",
                 "Paste recommendation JSON",
-                "Recommendation history"
+                "Recommendation history",
+                "Export AI journal (manual backup)",
+                "Restore AI journal (manual, conflict-checked)"
             )) { _, which ->
                 when (which) {
                     0 -> share()
                     1 -> importRecommendation()
                     2 -> history()
+                    3 -> exportJournal()
+                    4 -> restoreJournal()
                 }
             }
             .setNegativeButton("Close", null)
@@ -167,6 +171,48 @@ class AiManualAdvisorUi(
         } catch (error: Exception) {
             alert(error.message ?: "Could not record AI decision.")
         }
+    }
+
+    private fun exportJournal() {
+        try {
+            val document = journal.exportDocument()
+            val intent = Intent(Intent.ACTION_SEND).apply {
+                type = "application/json"
+                putExtra(Intent.EXTRA_TEXT, document.toString(2))
+            }
+            activity.startActivity(Intent.createChooser(intent, "Back up AI journal JSON"))
+        } catch (error: Exception) {
+            alert(error.message ?: "AI journal could not be exported.")
+        }
+    }
+
+    private fun restoreJournal() {
+        val field = EditText(activity).apply {
+            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_MULTI_LINE
+            minLines = 8
+            hint = "Paste investment.ai.journal JSON"
+            setHorizontallyScrolling(false)
+        }
+        val dialog = AlertDialog.Builder(activity)
+            .setTitle("Restore AI journal — local only")
+            .setMessage("Accepted/rejected conflicts block recovery. Nothing is imported into financial data.")
+            .setView(field)
+            .setNegativeButton("Cancel", null)
+            .setPositiveButton("Validate and merge", null)
+            .create()
+        dialog.setOnShowListener {
+            dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
+                try {
+                    val document = JSONObject(field.text.toString())
+                    journal.mergeDocument(document)
+                    dialog.dismiss()
+                    alert("AI journal merged locally. No financial data was changed.")
+                } catch (error: Exception) {
+                    Toast.makeText(activity, error.message ?: "AI journal conflict or invalid data.", Toast.LENGTH_LONG).show()
+                }
+            }
+        }
+        dialog.show()
     }
 
     private fun history() {
