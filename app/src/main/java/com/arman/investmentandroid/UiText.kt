@@ -25,6 +25,10 @@ object UiText {
         "Cash reserve surplus" to "مازاد ذخیره نقدی",
         "Cash reserve shortfall" to "کسری ذخیره نقدی",
         "Cash reserve on target" to "ذخیره نقدی مطابق هدف",
+        "Local data protection" to "محافظت از اطلاعات محلی",
+        "Stored Android data was not changed. Editing and sync are disabled until this data is safely recovered." to
+            "اطلاعات اندروید تغییر نکرده‌اند. تا بازیابی ایمن، ویرایش و همگام‌سازی غیرفعال هستند.",
+        "Check local data again" to "بررسی دوباره اطلاعات محلی",
         "Windows Portfolio" to "سبد ویندوز",
         "Read-only" to "فقط‌خواندنی",
         "Imported to phone: " to "زمان بارگذاری در گوشی: ",
