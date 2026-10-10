@@ -3781,6 +3781,49 @@ class MainActivity : Activity() {
                 }
             )
         } else {
+            val trend = PortfolioTrend.points(snapshots.map {
+                PortfolioTrend.Sample(it.timestamp, it.totalValue)
+            })
+            if (trend.size >= 2) {
+                content.addView(
+                    object : View(this) {
+                        private val linePaint = android.graphics.Paint(
+                            android.graphics.Paint.ANTI_ALIAS_FLAG
+                        ).apply {
+                            color = PortfolioAppearance.ACCENT
+                            strokeWidth = dp(3).toFloat()
+                            style = android.graphics.Paint.Style.STROKE
+                            strokeJoin = android.graphics.Paint.Join.ROUND
+                        }
+                        private val gridPaint = android.graphics.Paint(
+                            android.graphics.Paint.ANTI_ALIAS_FLAG
+                        ).apply {
+                            color = PortfolioAppearance.BORDER
+                            strokeWidth = dp(1).toFloat()
+                        }
+
+                        override fun onDraw(canvas: android.graphics.Canvas) {
+                            super.onDraw(canvas)
+                            val left = dp(12).toFloat()
+                            val top = dp(12).toFloat()
+                            val right = width.toFloat() - dp(12)
+                            val bottom = height.toFloat() - dp(12)
+                            if (right <= left || bottom <= top) return
+                            canvas.drawLine(left, bottom, right, bottom, gridPaint)
+                            val path = android.graphics.Path()
+                            trend.forEachIndexed { index, point ->
+                                val x = left + point.x * (right - left)
+                                val y = bottom - point.y * (bottom - top)
+                                if (index == 0) path.moveTo(x, y) else path.lineTo(x, y)
+                            }
+                            canvas.drawPath(path, linePaint)
+                        }
+                    },
+                    LinearLayout.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT, dp(150)
+                    ).apply { bottomMargin = dp(12) }
+                )
+            }
             snapshots.forEachIndexed { index, snapshot ->
                 val previous = snapshots.getOrNull(index + 1)
                 val change = previous?.let { snapshot.totalValue - it.totalValue }
