@@ -30,7 +30,7 @@ class WindowsReserveStatusTest {
             WindowsReserveStatus.fromVerifiedCash(1.0, -1.0)
         }
         assertThrows(IllegalArgumentException::class.java) {
-            WindowsReserveStatus.fromVerifiedCash(Double.MAX_VALUE, 0.0 - Double.MAX_VALUE)
+            WindowsReserveStatus.fromVerifiedCash(-Double.MAX_VALUE, Double.MAX_VALUE)
         }
     }
 
