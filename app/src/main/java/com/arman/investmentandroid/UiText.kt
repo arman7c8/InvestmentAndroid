@@ -343,6 +343,19 @@ object UiText {
         "Remove App Lock" to "برداشتن قفل برنامه",
         "Rename" to "تغییر نام",
         "Backup Error" to "خطای پشتیبان‌گیری",
+        "Confirm backup restore" to "تأیید بازیابی نسخه پشتیبان",
+        "Restore backup" to "بازیابی نسخه پشتیبان",
+        "The selected backup contains " to "فایل انتخاب‌شده شامل ",
+        " assets. Restoring replaces the phone portfolio and its history. " to
+            " دارایی است. بازیابی، سبد گوشی و تاریخچه آن را جایگزین می‌کند. ",
+        "The current local data is preserved for recovery. Continue?" to
+            "نسخه قبلی اطلاعات گوشی برای بازیابی محفوظ می‌ماند. ادامه می‌دهید؟",
+        "Edit BUY transaction" to "اصلاح تراکنش خرید",
+        "Save correction" to "ذخیره اصلاح خرید",
+        "Correction unavailable" to "اصلاح تراکنش مجاز نیست",
+        "A later change prevents safe correction. Nothing was changed." to
+            "به‌دلیل تغییر بعدی دارایی، اصلاح ایمن ممکن نیست؛ اطلاعات تغییری نکرد.",
+
         "Cloud Status" to "وضعیت ابر",
         "Cloud Sync Conflict" to "تداخل همگام‌سازی ابری",
         "Connect Google Drive" to "اتصال به گوگل درایو",
