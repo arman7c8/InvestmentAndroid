@@ -5,11 +5,12 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
-EXPECTED_BRANCH="feature/v032-unified-preview"
 BRANCH="$(git branch --show-current)"
-[[ "$BRANCH" == "$EXPECTED_BRANCH" ]] || {
-  echo "Stop: checkout $EXPECTED_BRANCH in a separate development workspace." >&2; exit 1;
-}
+# Only explicitly permitted disposable development branches may produce this APK.
+case "$BRANCH" in
+  feature/v032-unified-preview|feature/android-windows-v013-compat-guards-20261010) ;;
+  *) echo "Stop: use an approved isolated Android development branch." >&2; exit 1 ;;
+esac
 [[ -z "$(git status --porcelain --untracked-files=no)" ]] || {
   echo "Stop: tracked files have uncommitted changes." >&2; exit 1;
 }
@@ -50,7 +51,12 @@ assert ".setItems(" in menu, "AI Advisor action list has been removed"
 assert ".setMessage(" not in menu, "AlertDialog message hides AI Advisor actions on Android"
 history = source.split("    private fun history() {", 1)[1]
 assert "setTextColor(Color.DKGRAY)" not in history, "AI journal history has an unreadable hardcoded dark text color"
-print("PASS: AI Advisor action list and journal history theme color guards")
+boundary = Path("app/src/main/java/com/arman/investmentandroid/CoreProjectionBoundary.kt")
+safety = Path("app/src/main/java/com/arman/investmentandroid/PortfolioSafety.kt").read_text()
+if Path(".git/HEAD").read_text().strip().endswith("feature/android-windows-v013-compat-guards-20261010"):
+    assert boundary.is_file(), "Missing Windows Core origin boundary"
+    assert "CoreProjectionBoundary.isWindowsCoreAsset(" in safety, "Core-origin protection was disconnected"
+print("PASS: AI Advisor and Windows Core origin guards")
 PY
 
 echo "Testing $SHA with isolated package: $PACKAGE"
