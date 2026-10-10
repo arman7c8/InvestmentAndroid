@@ -14,6 +14,8 @@ object UiText {
         "Offline copy only. This is not live synchronization." to
             "این یک نسخه آفلاین است و همگام‌سازی زنده انجام نمی‌شود.",
         "Estimated portfolio value" to "ارزش تقریبی سبد بر اساس آخرین فایل",
+        "Estimated net worth (includes fixed assets)" to "ارزش خالص تخمینی (با دارایی‌های ثابت)",
+        "Net worth (incomplete: missing quotes)" to "ارزش خالص ناقص (کمبود قیمت)",
         "Priced holdings + cash (incomplete)" to "مجموع دارایی‌های قیمت‌دار و نقد (ناقص)",
         "Some nonzero holdings have no price. Total is incomplete." to
             "قیمت بعضی دارایی‌ها موجود نیست؛ ارزش کل ناقص است.",
