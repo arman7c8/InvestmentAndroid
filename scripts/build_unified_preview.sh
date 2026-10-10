@@ -62,6 +62,18 @@ assert 'PortfolioSafety.writeAndVerifyBackup(' in backup_source.split('exportBac
 assert 'snapshotsWithCurrentTotal(' not in backup_source, "Restore must not append synthetic history"
 assert '.putString(snapshotsKey, sourceSnapshots.toString())' in backup_source, "Restore history is not source-preserving"
 print("PASS: manual backup validation/readback and history idempotence source guards")
+assert 'PortfolioSafety.requireUnchangedLocalRestoreState(' in backup_source, "Import must protect transaction-only local changes"
+assert 'PortfolioSafety.requireCompleteManualRestoreHistory(' in backup_source, "Manual restore is allowed to mix unrelated history"
+import_part = backup_source.split('importBackupRequestCode -> {', 1)[1].split('createCloudBackupRequestCode -> {', 1)[0]
+assert '.setTitle(ui("Confirm backup restore"))' in import_part, "Nonempty local restores need explicit confirmation"
+assert 'commitManagedPortfolioChange(assets, transactions)' in backup_source, "Managed trade/ledger atomic commit missing"
+assert 'commitManagedPortfolioChange(currentAssets, currentTransactions)' in backup_source, "BUY correction bypasses atomic commit"
+assert 'EditableFinancialNumber.format(it.averageCost)' in backup_source, "Average-cost edit would truncate existing decimals"
+assert 'EditableFinancialNumber.format(it.quantity)' in backup_source, "Quantity edit would truncate crypto decimals"
+assert 'text = ui("Edit Asset")' in backup_source, "Asset editor action is not visible"
+assert 'TehranDisplayTime.gregorian(timestamp)' in backup_source, "Activity dates must be Tehran-local"
+print("PASS: local restore conflict, atomic trade, precision and Tehran presentation guards")
+
 # These v0.13 bridge features are strictly read-only or Android-local.
 corehome = Path("app/src/main/java/com/arman/investmentandroid/WindowsCoreHome.kt").read_text()
 assert "WindowsReserveStatus.fromVerifiedCash(" in corehome
