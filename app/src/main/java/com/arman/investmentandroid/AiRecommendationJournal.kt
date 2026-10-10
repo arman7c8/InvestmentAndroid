@@ -347,12 +347,27 @@ class AiRecommendationJournal private constructor(private val file: File) {
         throw JournalException("AI recommendation was not found.")
     }
 
-    fun compactHistory(now: Instant = Instant.now(), limit: Int = 12): List<AiAdvisorContract.RecommendationOutcome> {
+    fun compactHistory(
+        now: Instant = Instant.now(),
+        limit: Int = 12,
+        portfolioScope: String? = null
+    ): List<AiAdvisorContract.RecommendationOutcome> {
+        require(portfolioScope == null ||
+            portfolioScope in setOf("android-local", "windows-core-readonly")) {
+            "Unknown AI portfolio scope."
+        }
         val records = loadRoot().getJSONArray("records")
-        val start = maxOf(0, records.length() - limit.coerceIn(1, 24))
+        val relevant = (0 until records.length())
+            .map { records.getJSONObject(it) }
+            .filter { record ->
+                portfolioScope == null ||
+                    record.optJSONObject("snapshot")?.optString(
+                        "portfolio_scope", "android-local"
+                    ) == portfolioScope
+            }
+            .takeLast(limit.coerceIn(1, 24))
         val result = mutableListOf<AiAdvisorContract.RecommendationOutcome>()
-        for (index in start until records.length()) {
-            val record = records.getJSONObject(index)
+        for (record in relevant) {
             val status = record.optString("status")
             if (status != "accepted" && status != "rejected") continue
             val created = try { Instant.parse(record.getString("created_at")) } catch (_: Exception) { continue }
