@@ -3075,6 +3075,14 @@ class MainActivity : Activity() {
             card.addView(transactionRow)
         }
 
+        // An explicit edit action is discoverable on touch screens; tapping
+        // the name still works for existing users.
+        card.addView(Button(this).apply {
+            text = ui("Edit Asset")
+            isAllCaps = false
+            setOnClickListener { showAssetDialog(index, asset) }
+        })
+
         card.addView(
             TextView(this).apply {
                 text = ui("Tap name to edit • Long press card to delete")
@@ -3614,8 +3622,19 @@ class MainActivity : Activity() {
                 }
 
                 val current = assets[index]
+                if (!assetsEquivalent(current, asset) ||
+                    assets.count { it.name == current.name } != 1) {
+                    showFinancialSaveError(IllegalStateException(
+                        "Cash account changed while the editor was open."
+                    ))
+                    return@setOnClickListener
+                }
                 val oldBalance = current.value
                 val difference = finalBalance - oldBalance
+                if (kotlin.math.abs(difference) <= 0.01) {
+                    dialog.dismiss()
+                    return@setOnClickListener
+                }
 
                 assets[index] = current.copy(
                     quantity = 1.0,
