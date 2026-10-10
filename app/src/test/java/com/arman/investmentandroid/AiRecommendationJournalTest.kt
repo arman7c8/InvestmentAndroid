@@ -119,6 +119,66 @@ class AiRecommendationJournalTest {
         )
     }
 
+    @Test
+    fun sameRecommendationIdCannotReplaceOriginalAdvice() {
+        val folder = Files.createTempDirectory("investment-ai-journal-rewrite")
+        val journal = AiRecommendationJournal(folder.resolve("journal.json").toString())
+        val snapshot = AiAdvisorContract.buildSnapshot(
+            allocations = listOf(
+                AiAdvisorContract.Allocation("portfolio_asset", "BTC", 60.0, 60.0),
+                AiAdvisorContract.Allocation("portfolio_asset", "GOLD-1", 40.0, 40.0)
+            ),
+            generatedAt = "2026-10-09T12:00:00Z"
+        )
+        journal.recordRecommendation(snapshot, recommendation(), "manual")
+        val original = journal.exportDocument().toString()
+        val conflict = JSONObject(original)
+        conflict.getJSONArray("records").getJSONObject(0)
+            .getJSONObject("recommendation").put("summary", "Different recommendation.")
+        org.junit.Assert.assertThrows(AiRecommendationJournal.JournalException::class.java) {
+            journal.mergeDocument(conflict)
+        }
+        assertEquals(original, journal.exportDocument().toString())
+    }
+
+    @Test
+    fun oversizedImportNeverSilentlyDiscardsExistingJournal() {
+        val folder = Files.createTempDirectory("investment-ai-journal-overflow")
+        val journal = AiRecommendationJournal(folder.resolve("journal.json").toString())
+        val records = JSONArray()
+        for (i in 0..200) {
+            records.put(JSONObject()
+                .put("recommendation_id", "REC-$i")
+                .put("created_at", "2026-10-09T12:00:00Z")
+                .put("status", "pending"))
+        }
+        val remote = JSONObject()
+            .put("format", AiRecommendationJournal.FORMAT)
+            .put("schema_version", AiRecommendationJournal.SCHEMA_VERSION)
+            .put("records", records)
+        org.junit.Assert.assertThrows(IllegalArgumentException::class.java) {
+            journal.mergeDocument(remote)
+        }
+        assertEquals(0, journal.listRecords().size)
+    }
+
+    @Test
+    fun unknownImportedStatusCannotBeRecorded() {
+        val folder = Files.createTempDirectory("investment-ai-journal-status")
+        val journal = AiRecommendationJournal(folder.resolve("journal.json").toString())
+        val remote = JSONObject()
+            .put("format", AiRecommendationJournal.FORMAT)
+            .put("schema_version", AiRecommendationJournal.SCHEMA_VERSION)
+            .put("records", JSONArray().put(JSONObject()
+                .put("recommendation_id", "REC-A")
+                .put("created_at", "2026-10-09T12:00:00Z")
+                .put("status", "applied")))
+        org.junit.Assert.assertThrows(AiRecommendationJournal.JournalException::class.java) {
+            journal.mergeDocument(remote)
+        }
+        assertEquals(0, journal.listRecords().size)
+    }
+
     @Test(expected = AiRecommendationJournal.JournalException::class)
     fun conflictingTerminalDecisionsFailClosed() {
         val folder = Files.createTempDirectory("investment-ai-journal-conflict")
