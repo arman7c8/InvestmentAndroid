@@ -26,10 +26,12 @@ class AiManualAdvisorUi(
     private val snapshot: () -> JSONObject
 ) {
     private val journal by lazy { AiRecommendationJournal(activity) }
+    private fun tr(value: String): String =
+        UiText.translate(value, activity.resources.configuration.locales[0].language)
 
     private fun alert(message: String) {
         AlertDialog.Builder(activity)
-            .setTitle("AI Advisor — Preview")
+            .setTitle(tr("AI Advisor — Preview"))
             .setMessage(message)
             .setPositiveButton("OK", null)
             .show()
@@ -50,7 +52,7 @@ class AiManualAdvisorUi(
         // Keep the actions in the list and make the explanation a selectable
         // privacy-information item instead of a competing message.
         AlertDialog.Builder(activity)
-            .setTitle("AI Advisor — Offline preview")
+            .setTitle(tr("AI Advisor — Offline preview"))
             .setItems(arrayOf(
                 "Share privacy-safe percentages",
                 "Paste recommendation JSON",
@@ -58,7 +60,7 @@ class AiManualAdvisorUi(
                 "Export AI journal (manual backup)",
                 "Restore AI journal (manual, conflict-checked)",
                 "Privacy and safety information"
-            )) { _, which ->
+            ).map(::tr).toTypedArray()) { _, which ->
                 when (which) {
                     0 -> share()
                     1 -> importRecommendation()
@@ -104,7 +106,7 @@ class AiManualAdvisorUi(
             addView(field)
         }
         val dialog = AlertDialog.Builder(activity)
-            .setTitle("Validate offline AI suggestion")
+            .setTitle(tr("Validate offline AI suggestion"))
             .setMessage(
                 "Validation checks every public key and current percentage. " +
                     "Saving a recommendation does NOT apply financial changes."
@@ -157,7 +159,7 @@ class AiManualAdvisorUi(
             append("\n\nAccept only records this advice. No targets or transactions change.")
         }
         AlertDialog.Builder(activity)
-            .setTitle("AI suggestion — review only")
+            .setTitle(tr("AI suggestion — review only"))
             .setMessage(text)
             .setPositiveButton("Accept for tracking") { _, _ ->
                 decide(id, "accepted")
@@ -203,7 +205,7 @@ class AiManualAdvisorUi(
             setHorizontallyScrolling(false)
         }
         val dialog = AlertDialog.Builder(activity)
-            .setTitle("Restore AI journal — local only")
+            .setTitle(tr("Restore AI journal — local only"))
             .setMessage("Accepted/rejected conflicts block recovery. Nothing is imported into financial data.")
             .setView(field)
             .setNegativeButton("Cancel", null)
@@ -251,7 +253,7 @@ class AiManualAdvisorUi(
                 ViewGroup.LayoutParams.WRAP_CONTENT))
         }
         AlertDialog.Builder(activity)
-            .setTitle("AI recommendation journal (local only)")
+            .setTitle(tr("AI recommendation journal (local only)"))
             .setView(scroll)
             .setPositiveButton("Close", null)
             .show()
