@@ -2828,6 +2828,39 @@ class MainActivity : Activity() {
                         symbolInput.error = ui("Nobitex source is currently for Crypto assets")
                     else -> {
                         val assets = loadAssets()
+                        if (category == "Cash" && quantity != 1.0) {
+                            quantityInput.error = ui("Cash quantity must be 1")
+                            return@setOnClickListener
+                        }
+                        if (!(quantity * price).isFinite()) {
+                            priceInput.error = ui("Asset value is too large")
+                            return@setOnClickListener
+                        }
+                        if (isEditing) {
+                            // A dialog left open while a trade/cloud callback runs
+                            // must not create a duplicate or silently replace an asset.
+                            val original = existing ?: return@setOnClickListener
+                            if (index == null || index !in assets.indices ||
+                                !assetsEquivalent(assets[index], original) ||
+                                assets.count { it.name == original.name } != 1) {
+                                showFinancialSaveError(IllegalStateException(
+                                    "Asset changed while editing. Reopen Edit Asset."
+                                ))
+                                return@setOnClickListener
+                            }
+                            val hasManagedHistory = loadTransactions().any {
+                                it.managed && it.assetName == original.name
+                            }
+                            if (hasManagedHistory &&
+                                (name != original.name || category != original.category ||
+                                quantity != original.quantity || averageCost != original.averageCost)) {
+                                showFinancialSaveError(IllegalStateException(
+                                    "This asset has managed transactions. Edit the latest BUY " +
+                                        "in Activity or create a new trade; do not rewrite its ledger."
+                                ))
+                                return@setOnClickListener
+                            }
+                        }
                         val updated = (existing ?: Asset(
                             name, category, quantity, price, averageCost, targetPercent,
                             includeTargetCheck.isChecked, priceSource, symbol
@@ -2843,8 +2876,8 @@ class MainActivity : Activity() {
                             symbol = symbol
                         )
 
-                        if (isEditing && index != null && index in assets.indices) {
-                            assets[index] = updated
+                        if (isEditing) {
+                            assets[index!!] = updated
                         } else {
                             assets.add(updated)
                         }
