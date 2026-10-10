@@ -210,6 +210,14 @@ class AiRecommendationJournal private constructor(private val file: File) {
         for (index in 0 until records.length()) {
             val record = records.getJSONObject(index)
             if (record.optString("recommendation_id") == recommendationId) {
+                val previous = record.optString("status", "pending")
+                if (previous in setOf("accepted", "rejected")) {
+                    if (previous != status) {
+                        throw JournalException("AI decision is final; conflicting change was not saved.")
+                    }
+                    return JSONObject(record.toString()) // idempotent retry
+                }
+                require(previous == "pending") { "Unknown AI recommendation status." }
                 record.put("status", status)
                 record.put("decision_at", decidedAt.toString())
                 saveRoot(root)
