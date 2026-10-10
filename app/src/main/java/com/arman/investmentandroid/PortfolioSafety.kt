@@ -188,6 +188,42 @@ object PortfolioSafety {
         }
     }
 
+    /**
+     * Holdings alone are insufficient to decide whether a delayed SAF read may
+     * overwrite the local portfolio. Transactions and snapshots also count.
+     */
+    fun requireUnchangedLocalRestoreState(expected: String, current: String) {
+        check(expected == current) {
+            "Phone assets, transactions, or history changed during restore. Nothing was overwritten."
+        }
+    }
+
+    /**
+     * A manual restore must never quietly inherit the phone's old transaction
+     * history when the selected backup replaces its holdings. Older holdings-
+     * only formats are still accepted into an *empty* disposable portfolio.
+     */
+    fun requireCompleteManualRestoreHistory(
+        incoming: ValidatedBackup,
+        localTransactionsExist: Boolean,
+        localSnapshotsExist: Boolean
+    ) {
+        val payload = when (incoming.kind) {
+            BackupKind.SHARED -> incoming.androidPayload
+            BackupKind.LEGACY_ANDROID -> incoming.root
+        }
+        if (localTransactionsExist) {
+            require(payload?.optJSONArray("transactions") != null) {
+                "Backup has no transaction history. Existing phone history was preserved; restore cancelled."
+            }
+        }
+        if (localSnapshotsExist) {
+            require(payload?.optJSONArray("snapshots") != null) {
+                "Backup has no portfolio snapshots. Existing phone history was preserved; restore cancelled."
+            }
+        }
+    }
+
     fun decideSync(
         localFingerprint: String,
         remoteFingerprint: String,
