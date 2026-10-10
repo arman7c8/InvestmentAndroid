@@ -45,6 +45,19 @@ Required device acceptance (fake accounts/assets, never real write):
 - AI snapshot has no money, prices, quantities, bank/account IDs or raw transactions; reject stale/unknown/duplicated recommendation targets; journal backup/restore conflict leaves previous data intact.
 - Trial Windows sync with disposable SQLite only; PR #165 does not activate financial event apply.
 
+## Safety follow-up after first real-device preview
+
+The first APK (source `ed295aca764f`, SHA256 `260c48268f4ad28b83527ab3b87019c8e72f5779593a38f72b801004b34d50c9`) passed Gradle unit/lint/build/identity and was installed on a phone. Its AI Advisor action-list dialog was obscured on Android; this was corrected on the same Draft branch after that APK was built.
+
+Later branch commits also:
+- Add noncolliding public-only/anonymous keys to the manual AI privacy snapshot, avoiding duplicate-symbol failures and excluding private names;
+- Strengthen manual AI journal merge: validate imported statuses and dates, refuse duplicated IDs, oversized merges and immutable recommendation/outcome conflicts; retain the previous on-disk journal when validation fails;
+- Explicitly scope AI snapshots and compact learning history to `android-local` versus `windows-core-readonly`, preventing unrelated recommendations from contaminating the other portfolio's analysis;
+- Add Persian AI menu/action translations when the application's current locale is Persian;
+- Add synthetic tests for anonymous identities, journal conflicts/oversize and cross-portfolio AI history separation.
+
+**Every commit after `ed295aca764f` is UNBUILT/UNVERIFIED** until a fresh `bash scripts/build_unified_preview.sh` is run on the exact final source commit, and until the new APK is tested on a disposable Android preview installation. The earlier APK checksum and screenshot do NOT validate these later commits. Keep the original installed preview and production app untouched until new one passes.
+
 ## APK handling
 
 Produce exactly **one** unified APK from the final verified commit. Do not install over the existing Android app: unique application ID `com.arman.investmentandroid.preview<sha12>`. Never generate a final release or merge before the user's explicit approval.
