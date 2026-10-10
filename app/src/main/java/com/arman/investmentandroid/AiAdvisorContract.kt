@@ -78,8 +78,12 @@ object AiAdvisorContract {
         portfolioPerformancePct: Map<String, Double> = emptyMap(),
         recommendationHistory: List<RecommendationOutcome> = emptyList(),
         atlasContext: AtlasContext? = null,
-        generatedAt: String
+        generatedAt: String,
+        portfolioScope: String = "android-local"
     ): JSONObject {
+        require(portfolioScope in setOf("android-local", "windows-core-readonly")) {
+            "Unsupported AI portfolio scope."
+        }
         require(allocations.size <= MAX_ALLOCATIONS) {
             "Too many allocation rows for one AI snapshot."
         }
@@ -135,6 +139,7 @@ object AiAdvisorContract {
             .put("format", FORMAT)
             .put("schema_version", SCHEMA_VERSION)
             .put("generated_at", generatedAt.take(64))
+            .put("portfolio_scope", portfolioScope)
             .put("privacy", privacy)
             .put("allocations", rows)
             .put("portfolio_performance_pct", performance)
@@ -178,6 +183,10 @@ object AiAdvisorContract {
             throw ContractException("Unsupported AI snapshot.")
         }
         rejectSensitiveKeys(payload, "payload")
+        val scope = payload.optString("portfolio_scope", "android-local")
+        if (scope !in setOf("android-local", "windows-core-readonly")) {
+            throw ContractException("Unsupported AI portfolio scope.")
+        }
         val privacy = payload.optJSONObject("privacy")
             ?: throw ContractException("AI snapshot privacy declaration is missing.")
         val flags = listOf(
