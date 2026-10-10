@@ -6085,22 +6085,71 @@ class MainActivity : Activity() {
                 }
 
                 importBackupRequestCode -> {
-                    val expectedLocalFingerprint = sharedFingerprint(buildSharedPortfolio())
+                    // Asset fingerprints alone omit history; a transaction can change
+                    // while Android's document provider is reading a selected file.
+                    val expectedLocalState = capturePortfolioState().toString()
                     runStorageOperation(
                         label = "Validating backup",
                         task = {
                             val raw = readUriText(uri)
-                            PortfolioSafety.validateBackup(raw)
-                            raw
+                            val validated = PortfolioSafety.validateBackup(raw)
+                            when (validated.kind) {
+                                PortfolioSafety.BackupKind.SHARED ->
+                                    validated.sharedPortfolio?.let(
+                                        PortfolioSafety::requireEditableAndroidPortfolio
+                                    )
+                                PortfolioSafety.BackupKind.LEGACY_ANDROID ->
+                                    PortfolioSafety.requireEditableAndroidPortfolio(validated.root)
+                            }
+                            raw to validated
                         },
-                        onSuccess = { raw ->
-                            try {
-                                check(sharedFingerprint(buildSharedPortfolio()) == expectedLocalFingerprint) {
-                                    "Phone data changed while the file was being read. Nothing was overwritten."
-                                }
+                        onSuccess = { (raw, validated) ->
+                            fun verifyUnchangedAndRestore() {
+                                PortfolioSafety.requireUnchangedLocalRestoreState(
+                                    expectedLocalState, capturePortfolioState().toString()
+                                )
+                                PortfolioSafety.requireCompleteManualRestoreHistory(
+                                    validated,
+                                    localTransactionsExist = loadTransactions().isNotEmpty(),
+                                    localSnapshotsExist = loadSnapshots().isNotEmpty()
+                                )
                                 restoreBackupJson(raw)
-                                Toast.makeText(this, ui("Backup restored safely."), Toast.LENGTH_SHORT).show()
+                                Toast.makeText(
+                                    this, ui("Backup restored safely."), Toast.LENGTH_SHORT
+                                ).show()
                                 showPortfolioScreen()
+                            }
+                            try {
+                                PortfolioSafety.requireUnchangedLocalRestoreState(
+                                    expectedLocalState, capturePortfolioState().toString()
+                                )
+                                PortfolioSafety.requireCompleteManualRestoreHistory(
+                                    validated,
+                                    localTransactionsExist = loadTransactions().isNotEmpty(),
+                                    localSnapshotsExist = loadSnapshots().isNotEmpty()
+                                )
+                                val hasLocalData = loadAssets().isNotEmpty() ||
+                                    loadTransactions().isNotEmpty() || loadSnapshots().isNotEmpty()
+                                if (hasLocalData) {
+                                    val message = ui("The selected backup contains ") +
+                                        validated.incomingAssetCount +
+                                        ui(" assets. Restoring replaces the phone portfolio and its history. ") +
+                                        ui("The current local data is preserved for recovery. Continue?")
+                                    AlertDialog.Builder(this)
+                                        .setTitle(ui("Confirm backup restore"))
+                                        .setMessage(message)
+                                        .setNegativeButton(ui("Cancel"), null)
+                                        .setPositiveButton(ui("Restore backup")) { _, _ ->
+                                            try {
+                                                verifyUnchangedAndRestore()
+                                            } catch (error: Exception) {
+                                                showBackupFileError(error)
+                                            }
+                                        }
+                                        .show()
+                                } else {
+                                    verifyUnchangedAndRestore()
+                                }
                             } catch (error: Exception) {
                                 showBackupFileError(error)
                             }
