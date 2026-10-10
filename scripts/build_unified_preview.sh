@@ -53,9 +53,8 @@ history = source.split("    private fun history() {", 1)[1]
 assert "setTextColor(Color.DKGRAY)" not in history, "AI journal history has an unreadable hardcoded dark text color"
 boundary = Path("app/src/main/java/com/arman/investmentandroid/CoreProjectionBoundary.kt")
 safety = Path("app/src/main/java/com/arman/investmentandroid/PortfolioSafety.kt").read_text()
-if Path(".git/HEAD").read_text().strip().endswith("feature/android-windows-v013-compat-guards-20261010"):
-    assert boundary.is_file(), "Missing Windows Core origin boundary"
-    assert "CoreProjectionBoundary.isWindowsCoreAsset(" in safety, "Core-origin protection was disconnected"
+assert boundary.is_file(), "Missing Windows Core origin boundary"
+assert "CoreProjectionBoundary.isWindowsCoreAsset(" in safety, "Core-origin protection was disconnected"
 print("PASS: AI Advisor and Windows Core origin guards")
 PY
 
