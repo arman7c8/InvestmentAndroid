@@ -3185,9 +3185,7 @@ class MainActivity : Activity() {
                         }
 
                         pushUndoCheckpoint()
-                        saveAssets(assets)
-                        saveTransactions(transactions)
-                        recordSnapshot(assets)
+                        commitManagedPortfolioChange(assets, transactions)
                         dialog.dismiss()
                         showPortfolioScreen()
                     }
@@ -3608,9 +3606,7 @@ class MainActivity : Activity() {
                 }
 
                 pushUndoCheckpoint()
-                saveAssets(assets)
-                saveTransactions(transactions)
-                recordSnapshot(assets)
+                commitManagedPortfolioChange(assets, transactions)
                 dialog.dismiss()
                 showPortfolioScreen()
             }
@@ -3835,9 +3831,7 @@ class MainActivity : Activity() {
         }
 
         transactions.removeAll { it.id == transactionId }
-        saveAssets(assets)
-        saveTransactions(transactions)
-        recordSnapshot(assets)
+        commitManagedPortfolioChange(assets, transactions)
         showPortfolioScreen()
         Toast.makeText(this, ui("Transaction reverted."), Toast.LENGTH_SHORT).show()
     }
