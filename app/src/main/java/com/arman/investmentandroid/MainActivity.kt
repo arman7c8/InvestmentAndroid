@@ -3198,15 +3198,19 @@ class MainActivity : Activity() {
                         val transactions = loadTransactions()
 
                         if (isBuy) {
-                            val newQuantity = current.quantity + quantity
-                            val newAverageCost =
-                                ((current.quantity * current.averageCost) + (quantity * transactionPrice)) /
-                                    newQuantity
-
+                            val calculation = try {
+                                BuyCorrection.calculate(
+                                    current.quantity, current.averageCost,
+                                    quantity, transactionPrice
+                                )
+                            } catch (error: Exception) {
+                                showFinancialSaveError(error)
+                                return@setOnClickListener
+                            }
                             val updatedAsset = current.copy(
-                                quantity = newQuantity,
-                                price = transactionPrice,
-                                averageCost = newAverageCost
+                                quantity = calculation.quantity,
+                                price = calculation.currentPrice,
+                                averageCost = calculation.averageCost
                             )
                             assets[index] = updatedAsset
 
@@ -3226,6 +3230,13 @@ class MainActivity : Activity() {
                             )
                         } else {
                             val realizedProfit = (transactionPrice - current.averageCost) * quantity
+                            if (!realizedProfit.isFinite() ||
+                                !(transactionPrice * quantity).isFinite()) {
+                                showFinancialSaveError(IllegalArgumentException(
+                                    "Trade amount is too large; nothing was saved."
+                                ))
+                                return@setOnClickListener
+                            }
                             val newQuantity = current.quantity - quantity
 
                             val updatedAsset = if (newQuantity <= 0.0000001) {
