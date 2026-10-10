@@ -35,21 +35,29 @@ class AiManualAdvisorUi(
             .show()
     }
 
+    private fun showPrivacyInformation() {
+        alert(
+            "Only allocation and optional performance percentages are shared, " +
+                "and only when you explicitly choose an app. No amounts, quantities, " +
+                "bank details or transactions are exported. Suggestions never " +
+                "change investment targets or financial records."
+        )
+    }
+
     fun show() {
+        // AlertDialog.setMessage and setItems compete for its list/content panel:
+        // on Android 16 the message hid every action, leaving only Close.
+        // Keep the actions in the list and make the explanation a selectable
+        // privacy-information item instead of a competing message.
         AlertDialog.Builder(activity)
             .setTitle("AI Advisor — Offline preview")
-            .setMessage(
-                "Only allocation percentages and optional performance percentages " +
-                    "are shared when you explicitly choose an app. No amounts, " +
-                    "quantities, bank details or transactions are exported. " +
-                    "Suggestions never change investment targets."
-            )
             .setItems(arrayOf(
-                "Share privacy-safe snapshot",
+                "Share privacy-safe percentages",
                 "Paste recommendation JSON",
                 "Recommendation history",
                 "Export AI journal (manual backup)",
-                "Restore AI journal (manual, conflict-checked)"
+                "Restore AI journal (manual, conflict-checked)",
+                "Privacy and safety information"
             )) { _, which ->
                 when (which) {
                     0 -> share()
@@ -57,6 +65,7 @@ class AiManualAdvisorUi(
                     2 -> history()
                     3 -> exportJournal()
                     4 -> restoreJournal()
+                    5 -> showPrivacyInformation()
                 }
             }
             .setNegativeButton("Close", null)
