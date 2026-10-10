@@ -4,6 +4,8 @@ import android.content.Context
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
+import java.nio.file.Files
+import java.nio.file.StandardCopyOption
 import java.time.Duration
 import java.time.Instant
 import java.time.temporal.ChronoUnit
@@ -43,22 +45,23 @@ class AiRecommendationJournal private constructor(private val file: File) {
     }
 
     private fun saveRoot(root: JSONObject) {
+        file.parentFile?.mkdirs()
+        // Never delete the existing journal before replacement. A failed write
+        // must preserve the last durable recommendation/decision state.
+        val temporary = File(file.parentFile, file.name + ".tmp")
         try {
-            file.parentFile?.mkdirs()
-            val temporary = File(file.parentFile, file.name + ".tmp")
-            temporary.writeText(root.toString(2) + "\n", Charsets.UTF_8)
-            if (file.exists() && !file.delete()) {
-                temporary.delete()
-                throw JournalException("AI recommendation journal could not be replaced.")
+            temporary.outputStream().use { stream ->
+                stream.write((root.toString(2) + "\n").toByteArray(Charsets.UTF_8))
+                stream.flush()
+                (stream as java.io.FileOutputStream).fd.sync()
             }
-            if (!temporary.renameTo(file)) {
-                temporary.delete()
-                throw JournalException("AI recommendation journal could not be saved.")
-            }
-        } catch (exc: JournalException) {
-            throw exc
+            Files.move(
+                temporary.toPath(), file.toPath(),
+                StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING
+            )
         } catch (_: Exception) {
-            throw JournalException("AI recommendation journal could not be saved.")
+            temporary.delete()
+            throw JournalException("AI recommendation journal could not be saved atomically. Previous data was kept.")
         }
     }
 
