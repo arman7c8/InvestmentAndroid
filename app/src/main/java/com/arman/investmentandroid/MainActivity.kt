@@ -700,7 +700,16 @@ class MainActivity : Activity() {
             close(left.targetPercent, right.targetPercent) &&
             left.includeInTarget == right.includeInTarget &&
             left.priceSource == right.priceSource &&
-            left.symbol == right.symbol
+            left.symbol == right.symbol &&
+            // Provenance is part of identity for reversible financial events.
+            // Never match two same-named assets from different origins.
+            left.sharedId == right.sharedId &&
+            left.sourcePlatform == right.sourcePlatform &&
+            left.sourceKind == right.sourceKind &&
+            left.sourceGroupId == right.sourceGroupId &&
+            left.sourceAssetId == right.sourceAssetId &&
+            left.sourceBankId == right.sourceBankId &&
+            left.sourceGroupKind == right.sourceGroupKind
     }
 
     private fun loadTransactions(): MutableList<Transaction> {
@@ -3586,8 +3595,11 @@ class MainActivity : Activity() {
         if (!transaction.managed || !isLatestManagedTransactionForAsset(transaction, allTransactions)) {
             return false
         }
-
+        // Looking up by name is a legacy compatibility constraint: reject
+        // ambiguous names rather than reversing the wrong asset's transaction.
+        val sameNamed = assets.count { it.name == transaction.assetName }
         val expectedAfter = assetFromJson(transaction.afterAssetJson)
+        if (sameNamed > 1 || (expectedAfter != null && sameNamed != 1)) return false
         val current = assets.firstOrNull { it.name == transaction.assetName }
 
         return if (expectedAfter == null) {
