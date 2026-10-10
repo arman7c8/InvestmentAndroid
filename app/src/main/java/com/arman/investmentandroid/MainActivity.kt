@@ -883,6 +883,18 @@ class MainActivity : Activity() {
      * transaction: holdings, event history and chart snapshot move together.
      * Windows Core and cloud files remain read-only/out of scope.
      */
+    private fun showFinancialSaveError(error: Exception) {
+        AlertDialog.Builder(this)
+            .setTitle(ui("Transaction not saved"))
+            .setMessage(
+                ui("The financial change could not be confirmed. " +
+                    "Check the portfolio and Activity before retrying.") +
+                    "\n" + (error.message ?: "")
+            )
+            .setPositiveButton(ui("OK"), null)
+            .show()
+    }
+
     private fun commitManagedPortfolioChange(
         assets: List<Asset>,
         transactions: List<Transaction>
@@ -3136,6 +3148,16 @@ class MainActivity : Activity() {
                         }
 
                         val current = assets[index]
+                        // A stale dialog must not change an asset that was
+                        // updated, renamed or replaced after it opened.
+                        if (!assetsEquivalent(current, asset) ||
+                            assets.count { it.name == current.name } != 1 ||
+                            (!isBuy && quantity > current.quantity)) {
+                            showFinancialSaveError(IllegalStateException(
+                                "Asset changed or is ambiguous. Reopen the trade editor."
+                            ))
+                            return@setOnClickListener
+                        }
                         val transactions = loadTransactions()
 
                         if (isBuy) {
@@ -3195,10 +3217,14 @@ class MainActivity : Activity() {
                             )
                         }
 
-                        pushUndoCheckpoint()
-                        commitManagedPortfolioChange(assets, transactions)
-                        dialog.dismiss()
-                        showPortfolioScreen()
+                        try {
+                            pushUndoCheckpoint()
+                            commitManagedPortfolioChange(assets, transactions)
+                            dialog.dismiss()
+                            showPortfolioScreen()
+                        } catch (error: Exception) {
+                            showFinancialSaveError(error)
+                        }
                     }
                 }
             }
@@ -3616,10 +3642,14 @@ class MainActivity : Activity() {
                     )
                 }
 
-                pushUndoCheckpoint()
-                commitManagedPortfolioChange(assets, transactions)
-                dialog.dismiss()
-                showPortfolioScreen()
+                try {
+                    pushUndoCheckpoint()
+                    commitManagedPortfolioChange(assets, transactions)
+                    dialog.dismiss()
+                    showPortfolioScreen()
+                } catch (error: Exception) {
+                    showFinancialSaveError(error)
+                }
             }
         }
 
@@ -3822,9 +3852,13 @@ class MainActivity : Activity() {
         }
 
         transactions.removeAll { it.id == transactionId }
-        commitManagedPortfolioChange(assets, transactions)
-        showPortfolioScreen()
-        Toast.makeText(this, ui("Transaction reverted."), Toast.LENGTH_SHORT).show()
+        try {
+            commitManagedPortfolioChange(assets, transactions)
+            showPortfolioScreen()
+            Toast.makeText(this, ui("Transaction reverted."), Toast.LENGTH_SHORT).show()
+        } catch (error: Exception) {
+            showFinancialSaveError(error)
+        }
     }
 
     private fun showActivityDialog(page: Int = 0) {
