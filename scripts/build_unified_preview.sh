@@ -48,7 +48,9 @@ assert "    fun show() {" in source and "    private fun share()" in source
 menu = source.split("    fun show() {", 1)[1].split("    private fun share()", 1)[0]
 assert ".setItems(" in menu, "AI Advisor action list has been removed"
 assert ".setMessage(" not in menu, "AlertDialog message hides AI Advisor actions on Android"
-print("PASS: AI Advisor action list cannot be hidden by a competing message")
+history = source.split("    private fun history() {", 1)[1]
+assert "setTextColor(Color.DKGRAY)" not in history, "AI journal history has an unreadable hardcoded dark text color"
+print("PASS: AI Advisor action list and journal history theme color guards")
 PY
 
 echo "Testing $SHA with isolated package: $PACKAGE"
