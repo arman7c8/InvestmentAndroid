@@ -58,6 +58,23 @@ Later branch commits also:
 
 **Every commit after `ed295aca764f` is UNBUILT/UNVERIFIED** until a fresh `bash scripts/build_unified_preview.sh` is run on the exact final source commit, and until the new APK is tested on a disposable Android preview installation. The earlier APK checksum and screenshot do NOT validate these later commits. Keep the original installed preview and production app untouched until new one passes.
 
+## On-device AI acceptance checkpoint (2026-10-10)
+
+Verified by user screenshots on isolated APK `preview6672dbf578c5` (commit `6672dbf578c5`):
+- AI Advisor menu now visibly displays all six actions;
+- Empty allocation produces a clear error and does not open the Android share sheet;
+- Empty AI recommendation journal produces the expected empty-state message;
+- Disposable Android-local BTC 6,000,000 Toman and ETH 4,000,000 Toman show 60% / 40% targets and 10,000,000 Toman combined;
+- Actual shared AI snapshot text contains only BTC/ETH IDs, current/target percentages, nonfinancial metadata, no amounts/prices/quantities/accounts/transactions;
+- Manually pasted schema-v1 JSON validates and displays unchanged 60% / 40% proposals; accepted recommendation appears in journal;
+- After reopening the app, the journal entry still appears (persistence observed).
+
+**Observed device defect:** Journal record text is nearly invisible on dark dialog because `AiManualAdvisorUi.history()` forced `Color.DKGRAY`. Removed fixed foreground and added a build-script source guard in `a2dcfd6d77e7`. **Not rebuilt or verified on device**. Existing installed APK remains `6672dbf578c5`.
+
+**Still unverified:** financial total and holdings after app restart (the latest screenshots are scrolled; do not infer the total), per-device post-fix dark history contrast, journal export/restore/conflicts on device, Windows Core real export/Net Worth parity, and Android/Windows financial-sync isolation under stressful interruptions. No real portfolio data was used in these tests.
+
+No new APK should be called validated until unit tests, lint, assembly, signing and package identity pass on the exact new commit; no merge/release.
+
 ## APK handling
 
 Produce exactly **one** unified APK from the final verified commit. Do not install over the existing Android app: unique application ID `com.arman.investmentandroid.preview<sha12>`. Never generate a final release or merge before the user's explicit approval.
