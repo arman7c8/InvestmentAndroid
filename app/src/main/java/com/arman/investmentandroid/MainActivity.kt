@@ -5639,20 +5639,6 @@ class MainActivity : Activity() {
         )
     }
 
-    private fun snapshotsWithCurrentTotal(source: JSONArray, assets: List<Asset>): JSONArray {
-        val result = JSONArray()
-        for (index in 0 until source.length()) {
-            result.put(source.get(index))
-        }
-        result.put(
-            JSONObject().apply {
-                put("totalValue", assets.sumOf { it.value })
-                put("timestamp", System.currentTimeMillis())
-            }
-        )
-        return result
-    }
-
     private fun applySharedBackup(
         validated: PortfolioSafety.ValidatedBackup,
         mergeLocalHistory: Boolean = false
@@ -5673,6 +5659,8 @@ class MainActivity : Activity() {
         }
         val localSnapshots = JSONArray(prefs.getString(snapshotsKey, "[]") ?: "[]")
         val remoteSnapshots = supplemental?.optJSONArray("snapshots") ?: JSONArray()
+        // Restoring an exported snapshot is not a new market valuation event.
+        // Preserve source history exactly; repeated imports must not invent points.
         val sourceSnapshots = if (mergeLocalHistory) {
             PortfolioSafety.mergeHistory(localSnapshots, remoteSnapshots, "timestamp")
         } else {
@@ -5692,7 +5680,7 @@ class MainActivity : Activity() {
         val committed = prefs.edit()
             .putString(assetsKey, assetsToJsonArray(plan.assets).toString())
             .putString(transactionsKey, transactions.toString())
-            .putString(snapshotsKey, snapshotsWithCurrentTotal(sourceSnapshots, plan.assets).toString())
+            .putString(snapshotsKey, sourceSnapshots.toString())
             .putString(toleranceKey, plan.tolerance.toString())
             .putString(displayUnitKey, displayUnit)
             .putString(summaryPeriodKey, summaryPeriod)
@@ -5944,8 +5932,15 @@ class MainActivity : Activity() {
                     runStorageOperation(
                         label = "Exporting backup",
                         task = {
-                            writeUriText(uri, createBackupJson())
-                            Unit
+                            // Validate exactly what will be written and verify provider readback.
+                            // A successful OutputStream.close alone cannot prove a complete backup.
+                            val backup = createBackupJson()
+                            PortfolioSafety.validateBackup(backup)
+                            PortfolioSafety.writeAndVerifyBackup(
+                                backup,
+                                write = { writeUriText(uri, it) },
+                                read = { readUriText(uri) }
+                            )
                         },
                         onSuccess = {
                             Toast.makeText(this, ui("Backup exported safely."), Toast.LENGTH_SHORT).show()
