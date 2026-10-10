@@ -3762,30 +3762,10 @@ class MainActivity : Activity() {
                     val transactionIndex = currentTransactions.indexOfFirst { it.id == transactionId }
                     currentAssets[assetIndex] = correctedAsset
                     currentTransactions[transactionIndex] = correctedTransaction
-                    val prefs = getSharedPreferences(prefsName, MODE_PRIVATE)
-                    // Keep the pre-Restore recovery copy intact. Undo retains the
-                    // pre-correction portfolio, and one commit updates both ledgers.
+                    // Keep the pre-Restore recovery copy intact; use the same
+                    // atomic ledger+history+snapshot commit as BUY/SELL/Revert.
                     pushUndoCheckpoint()
-                    val success = prefs.edit()
-                        .putString(assetsKey, assetsToJsonArray(currentAssets).toString())
-                        .putString(transactionsKey, JSONArray().apply {
-                            currentTransactions.forEach { tx ->
-                                put(JSONObject().apply {
-                                    put("id", tx.id)
-                                    put("type", tx.type)
-                                    put("assetName", tx.assetName)
-                                    put("quantity", tx.quantity)
-                                    put("price", tx.price)
-                                    put("realizedProfit", tx.realizedProfit)
-                                    put("timestamp", tx.timestamp)
-                                    put("beforeAssetJson", tx.beforeAssetJson ?: JSONObject.NULL)
-                                    put("afterAssetJson", tx.afterAssetJson ?: JSONObject.NULL)
-                                    put("managed", tx.managed)
-                                })
-                            }
-                        }.toString())
-                        .commit()
-                    check(success) { "Could not commit correction; recovery copy retained." }
+                    commitManagedPortfolioChange(currentAssets, currentTransactions)
                     dialog.dismiss()
                     showPortfolioScreen()
                 } catch (error: Exception) {
