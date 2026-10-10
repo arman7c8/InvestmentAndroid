@@ -994,12 +994,8 @@ class MainActivity : Activity() {
         }.format(value)
     }
 
-    private fun formatDate(timestamp: Long): String {
-        // Presentation only; do not alter the stored UTC epoch milliseconds.
-        return SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.US).apply {
-            timeZone = java.util.TimeZone.getTimeZone("Asia/Tehran")
-        }.format(Date(timestamp))
-    }
+    private fun formatDate(timestamp: Long): String =
+        TehranDisplayTime.gregorian(timestamp)
 
     private fun loadTolerance(): Double {
         val raw = getSharedPreferences(prefsName, MODE_PRIVATE)
