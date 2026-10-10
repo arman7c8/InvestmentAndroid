@@ -3687,8 +3687,8 @@ class MainActivity : Activity() {
                     currentAssets[assetIndex] = correctedAsset
                     currentTransactions[transactionIndex] = correctedTransaction
                     val prefs = getSharedPreferences(prefsName, MODE_PRIVATE)
-                    // Preserve a full recovery point before a single atomic preference commit.
-                    preservePreRestoreState()
+                    // Keep the pre-Restore recovery copy intact. Undo retains the
+                    // pre-correction portfolio, and one commit updates both ledgers.
                     pushUndoCheckpoint()
                     val success = prefs.edit()
                         .putString(assetsKey, assetsToJsonArray(currentAssets).toString())
