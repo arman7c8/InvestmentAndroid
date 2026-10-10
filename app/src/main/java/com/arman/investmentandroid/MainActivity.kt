@@ -3597,6 +3597,133 @@ class MainActivity : Activity() {
         }
     }
 
+    /**
+     * Only a verified, latest BUY may be corrected. Keep the original transaction
+     * ID and timestamp so backup restores cannot duplicate it.
+     */
+    private fun showCorrectBuyDialog(transactionId: String) {
+        val transactions = loadTransactions()
+        val transaction = transactions.firstOrNull { it.id == transactionId } ?: return
+        val assets = loadAssets()
+        if (transaction.type != "BUY" ||
+            !canSafelyRevertTransaction(transaction, transactions, assets)) {
+            AlertDialog.Builder(this)
+                .setTitle(ui("Correction unavailable"))
+                .setMessage(ui("A later change prevents safe correction. Nothing was changed."))
+                .setPositiveButton(ui("OK"), null).show()
+            return
+        }
+        val quantityInput = EditText(this).apply {
+            hint = ui("Quantity")
+            inputType = InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_FLAG_DECIMAL
+            setText(formatQuantity(transaction.quantity).replace(",", ""))
+        }
+        val priceInput = EditText(this).apply {
+            hint = ui("Transaction price per unit (Toman)")
+            inputType = InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_FLAG_DECIMAL
+            setText(formatQuantity(transaction.price).replace(",", ""))
+        }
+        val form = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(20), dp(10), dp(20), 0)
+            addView(quantityInput)
+            addView(priceInput)
+        }
+        val dialog = AlertDialog.Builder(this)
+            .setTitle(ui("Edit BUY transaction"))
+            .setView(form)
+            .setNegativeButton(ui("Cancel"), null)
+            .setPositiveButton(ui("Save correction"), null)
+            .create()
+        dialog.setOnShowListener {
+            dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
+                val quantity = UiText.parseUserNumber(quantityInput.text.toString().trim().replace(",", ""))
+                val price = UiText.parseUserNumber(priceInput.text.toString().trim().replace(",", ""))
+                if (quantity == null || quantity <= 0.0 || !quantity.isFinite()) {
+                    quantityInput.error = ui("Enter a quantity greater than zero")
+                    return@setOnClickListener
+                }
+                if (price == null || price < 0.0 || !price.isFinite()) {
+                    priceInput.error = ui("Enter a valid transaction price")
+                    return@setOnClickListener
+                }
+                try {
+                    // Recheck against disk because the editor might have been open
+                    // while a different portfolio operation completed.
+                    val currentTransactions = loadTransactions()
+                    val current = currentTransactions.singleOrNull { it.id == transactionId }
+                        ?: throw IllegalStateException("Transaction changed; no correction applied.")
+                    val currentAssets = loadAssets()
+                    check(current == transaction && current.type == "BUY" &&
+                        canSafelyRevertTransaction(current, currentTransactions, currentAssets)) {
+                        "Transaction or portfolio changed; no correction applied."
+                    }
+                    if (current.quantity == quantity && current.price == price) {
+                        dialog.dismiss()
+                        return@setOnClickListener
+                    }
+                    val before = assetFromJson(current.beforeAssetJson)
+                        ?: throw IllegalStateException("Original asset state is unavailable.")
+                    val after = assetFromJson(current.afterAssetJson)
+                        ?: throw IllegalStateException("Recorded post-trade state is unavailable.")
+                    check(before.name == current.assetName && after.name == current.assetName &&
+                        currentAssets.count { it.name == current.assetName } == 1) {
+                        "Asset identity is ambiguous; no correction applied."
+                    }
+                    val calculation = BuyCorrection.calculate(
+                        before.quantity, before.averageCost, quantity, price
+                    )
+                    val correctedAsset = before.copy(
+                        quantity = calculation.quantity,
+                        averageCost = calculation.averageCost,
+                        price = calculation.currentPrice
+                    )
+                    val correctedTransaction = current.copy(
+                        quantity = quantity, price = price,
+                        afterAssetJson = assetToJson(correctedAsset)
+                    )
+                    val assetIndex = currentAssets.indexOfFirst { it.name == current.assetName }
+                    val transactionIndex = currentTransactions.indexOfFirst { it.id == transactionId }
+                    currentAssets[assetIndex] = correctedAsset
+                    currentTransactions[transactionIndex] = correctedTransaction
+                    val prefs = getSharedPreferences(prefsName, MODE_PRIVATE)
+                    // Preserve a full recovery point before a single atomic preference commit.
+                    preservePreRestoreState()
+                    pushUndoCheckpoint()
+                    val success = prefs.edit()
+                        .putString(assetsKey, assetsToJsonArray(currentAssets).toString())
+                        .putString(transactionsKey, JSONArray().apply {
+                            currentTransactions.forEach { tx ->
+                                put(JSONObject().apply {
+                                    put("id", tx.id)
+                                    put("type", tx.type)
+                                    put("assetName", tx.assetName)
+                                    put("quantity", tx.quantity)
+                                    put("price", tx.price)
+                                    put("realizedProfit", tx.realizedProfit)
+                                    put("timestamp", tx.timestamp)
+                                    put("beforeAssetJson", tx.beforeAssetJson ?: JSONObject.NULL)
+                                    put("afterAssetJson", tx.afterAssetJson ?: JSONObject.NULL)
+                                    put("managed", tx.managed)
+                                })
+                            }
+                        }.toString())
+                        .commit()
+                    check(success) { "Could not commit correction; recovery copy retained." }
+                    dialog.dismiss()
+                    showPortfolioScreen()
+                } catch (error: Exception) {
+                    AlertDialog.Builder(this)
+                        .setTitle(ui("Correction unavailable"))
+                        .setMessage(error.message ?: "Correction rejected safely.")
+                        .setPositiveButton(ui("OK"), null)
+                        .show()
+                }
+            }
+        }
+        dialog.show()
+    }
+
     private fun revertTransaction(transactionId: String) {
         val transactions = loadTransactions()
         val transaction = transactions.firstOrNull { it.id == transactionId } ?: return
@@ -3696,6 +3823,14 @@ class MainActivity : Activity() {
                                 }
                                 .show()
                         }
+                    }
+
+                    if (transaction.type == "BUY" && canRevert) {
+                        card.addView(Button(this).apply {
+                            text = ui("Edit BUY transaction")
+                            isAllCaps = false
+                            setOnClickListener { showCorrectBuyDialog(transaction.id) }
+                        })
                     }
 
                     card.addView(
