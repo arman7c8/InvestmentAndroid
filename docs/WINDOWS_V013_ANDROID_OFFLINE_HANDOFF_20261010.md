@@ -35,3 +35,10 @@ Date: 2026-10-10. User has no laptop and requested autonomous Android-only imple
 ## Proposed next development steps after the verified build
 
 Prioritize an explicit read-only safe recovery screen for damaged Android-local JSON; rejection currently prevents writes but certain UI flows may show errors/crash rather than guide restore. Test crash-interruption persistence and Undo/Redo stack atomics separately. Do not advertise data-loss-proof storage before those gates pass.
+
+## Additional verified static-source checks
+
+- GitHub blob-level parity against Windows `release/windows` on the same date: `core_mobile_sync.py` `f9eb0731130a281ef0424d0ed4adbfba2980ea4a`, `core/repository.py` `7eb4c5c529f30efa09b7d9048f5ca905236f33b8`, `core_sync.py` `3e569ac5c0a3ec43362690a6e264d8e1cc8cec96`, and `core_drive_backup.py` `237895ce1bc538c62b591b28a3ac2509adc4fdcf` are **identical** to the active v0.13 UI-staging branch. Hence the current Windows v0.13 increment has **not changed those four financial/export/Drive modules**. This does not prove every GUI behavior unchanged.
+- Added a read-only **Local data protection** screen before displaying an editable Android portfolio if stored local assets, transaction history or valuation snapshots cannot be verified. Background price refresh and smart cloud sync are disabled in that state. The original bytes are left intact and there is no automatic reset, overwrite or inferred recovery.
+- The recovery screen is deliberately *not yet* a full guided import or repair flow. The correct recovery procedure for damaged preferences requires a separately validated, recoverable pre-restore backup; do not misrepresent a static warning as tested disaster recovery.
+- Current commit after this addendum requires new full Gradle/JUnit, lint, assembly and isolated Android on-device acceptance. Local readback/source checks are not an APK acceptance test.
