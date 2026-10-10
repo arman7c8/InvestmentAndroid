@@ -1944,7 +1944,14 @@ class MainActivity : Activity() {
     // integration is explicitly verified. No Windows financial proposal,
     // Android transaction or target is applied by this feature.
     private fun buildUnifiedAiSnapshot(): JSONObject {
-        val history = AiRecommendationJournal(this).compactHistory()
+        val portfolioScope = if (isWindowsCoreHomeSelected()) {
+            "windows-core-readonly"
+        } else {
+            "android-local"
+        }
+        val history = AiRecommendationJournal(this).compactHistory(
+            portfolioScope = portfolioScope
+        )
          val allocations = if (isWindowsCoreHomeSelected()) {
             val current = loadVerifiedWindowsCore()
                 ?: throw IllegalStateException("Windows read-only file is missing.")
@@ -1999,7 +2006,8 @@ class MainActivity : Activity() {
         return AiAdvisorContract.buildSnapshot(
             allocations = allocations,
             recommendationHistory = history,
-            generatedAt = java.time.Instant.now().toString()
+            generatedAt = java.time.Instant.now().toString(),
+            portfolioScope = portfolioScope
         )
     }
 
